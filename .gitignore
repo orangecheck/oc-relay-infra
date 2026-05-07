@@ -1,0 +1,16 @@
+# Local data
+/data/
+/var/
+
+# Editor
+.DS_Store
+.vscode/
+.idea/
+
+# Caddy / TLS state — not committed; regenerated on deploy
+caddy-data/
+caddy-config/
+
+# Local-secrets file. Real secrets live in `~/Projects/ochk/.env` (workspace
+# root) or in the deploy host's environment, never in this repo.
+.env

@@ -1,0 +1,37 @@
+# Caddy reverse proxy for relay.ochk.io
+#
+# Routes:
+#   wss://relay.ochk.io/      → strfry:7777 (the WebSocket Nostr relay)
+#   https://relay.ochk.io/    → NIP-11 information document (strfry serves
+#                                this on the same socket via Accept header)
+#   https://relay.ochk.io/health → JSON probe (consumed by status.ochk.io
+#                                  and the family-vitals widget on ochk.io)
+#   https://relay.ochk.io/transparency → static page from
+#                                  /srv/transparency/index.html, kept in
+#                                  sync from a private ops-only repo
+
+relay.ochk.io {
+    encode zstd gzip
+
+    @health path /health
+    handle @health {
+        reverse_proxy strfry:7777
+    }
+
+    @transparency path /transparency*
+    handle @transparency {
+        root * /srv/transparency
+        file_server
+    }
+
+    handle {
+        reverse_proxy strfry:7777
+    }
+
+    log {
+        output file /data/access.log {
+            roll_size 100mb
+            roll_keep 7
+        }
+    }
+}
