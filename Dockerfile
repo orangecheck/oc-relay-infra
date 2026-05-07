@@ -29,9 +29,6 @@ COPY policy/oc-dtag-filter.ts /data/strfry/policy/oc-dtag-filter.ts
 COPY sync/backfill.sh /usr/local/bin/oc-relay-backfill
 RUN chmod +x /data/strfry/policy/oc-dtag-filter.ts /usr/local/bin/oc-relay-backfill
 
-# Cache the Deno script so cold starts don't fetch.
-RUN deno cache /data/strfry/policy/oc-dtag-filter.ts
-
 EXPOSE 7777
 
 ENTRYPOINT ["/app/strfry", "--config=/etc/strfry.conf"]
