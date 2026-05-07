@@ -18,7 +18,7 @@ RUN apk add --no-cache ca-certificates bash
 
 # Deno for the write-policy plugin. Pull the alpine-built (musl) binary
 # directly from the official image — no glibc mismatch on Alpine strfry base.
-COPY --from=deno-source /usr/bin/deno /usr/local/bin/deno
+COPY --from=deno-source /bin/deno /usr/local/bin/deno
 RUN chmod +x /usr/local/bin/deno
 
 # App layout. The plugin lives where strfry.conf points.
