@@ -1,0 +1,53 @@
+# fly.toml — relay.ochk.io
+#
+# Single-region (fra) deploy of strfry. Fly handles TLS termination at the
+# edge and proxies to the internal :7777 over the private network. Public
+# DNS for relay.ochk.io is attached via `flyctl certs add relay.ochk.io`.
+#
+# Persistent storage: a 50 GiB Fly Volume mounted at /data/strfry/db. The
+# mapsize ceiling in strfry.conf matches.
+
+app = "oc-relay-ochk"
+primary_region = "fra"
+
+[build]
+    dockerfile = "Dockerfile"
+
+[env]
+    STRFRY_CONFIG = "/etc/strfry.conf"
+
+[[services]]
+    internal_port = 7777
+    protocol = "tcp"
+    auto_stop_machines = false
+    auto_start_machines = false
+    min_machines_running = 1
+
+    [[services.ports]]
+        port = 80
+        handlers = ["http"]
+        force_https = true
+
+    [[services.ports]]
+        port = 443
+        handlers = ["tls", "http"]
+        # Fly's TLS handler upgrades wss:// → tcp at the edge and forwards
+        # plain WebSocket frames to internal_port.
+
+    [[services.tcp_checks]]
+        interval = "30s"
+        timeout = "5s"
+        grace_period = "30s"
+
+[[mounts]]
+    source = "strfry_data"
+    destination = "/data/strfry/db"
+    initial_size = "50gb"
+
+[[vm]]
+    size = "shared-cpu-2x"
+    memory = "1gb"
+    cpus = 2
+
+[deploy]
+    strategy = "immediate"

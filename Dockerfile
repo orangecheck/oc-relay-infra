@@ -1,41 +1,37 @@
 # Dockerfile — relay.ochk.io
 #
-# Two-stage:
-#   1. Pinned strfry binary from upstream image (built reproducibly there).
-#   2. Final image adds Deno (for the write-policy plugin) + the plugin file
-#      + entrypoint that launches strfry with the conf.
+# Single-stage:
+#   1. dockurr/strfry pinned image as base (it builds strfry reproducibly upstream).
+#   2. Add Deno for the write-policy plugin + the plugin file + our config.
 #
-# Caddy + TLS termination is a SEPARATE container in compose.yaml, so this
-# image is reusable as-is on Fly.io / Hetzner / bare metal.
+# Fly handles TLS termination at the edge (see fly.toml [[services.ports]]),
+# so this image only listens internally on :7777. No Caddy, no Let's Encrypt
+# bookkeeping inside the container.
 
-FROM dockurr/strfry:0.9.7@sha256:9c6b7c4e6a8b1f9a2c3d4e5f6789abcdef0123456789abcdef0123456789abcd AS strfry-base
-# NB: pin the digest above to whatever the latest strfry release is at
-# provisioning time. The digest above is a placeholder — Phase 1 step 1
-# replaces it with the real one before first deploy.
+FROM dockurr/strfry:0.9.7
 
-FROM denoland/deno:alpine-1.46.3 AS final
+USER root
 
-# Pull strfry binary across.
-COPY --from=strfry-base /app/strfry /usr/local/bin/strfry
+# Deno for the write-policy plugin. Slim install — we only need the binary,
+# no toolchain or stdlib.
+RUN apk add --no-cache curl unzip ca-certificates bash \
+    && curl -fsSL https://github.com/denoland/deno/releases/download/v1.46.3/deno-x86_64-unknown-linux-gnu.zip -o /tmp/deno.zip \
+    && unzip -q /tmp/deno.zip -d /usr/local/bin \
+    && rm /tmp/deno.zip \
+    && chmod +x /usr/local/bin/deno
 
-# Pull the LMDB shared lib if the base image links dynamically.
-COPY --from=strfry-base /app/strfry-stuff /app/strfry-stuff
-
-# App layout.
+# App layout. The plugin lives where strfry.conf points.
 RUN mkdir -p /data/strfry/db /data/strfry/policy /data/strfry/logs
 
 COPY strfry.conf /etc/strfry.conf
 COPY policy/oc-dtag-filter.ts /data/strfry/policy/oc-dtag-filter.ts
+COPY sync/backfill.sh /usr/local/bin/oc-relay-backfill
+RUN chmod +x /data/strfry/policy/oc-dtag-filter.ts /usr/local/bin/oc-relay-backfill
 
-# Cache deno module deps so cold-start doesn't fetch.
+# Cache the Deno script so cold starts don't fetch.
 RUN deno cache /data/strfry/policy/oc-dtag-filter.ts
 
 EXPOSE 7777
 
-# Drop privileges before launching strfry. strfry binds <1024 only when
-# necessary; port 7777 doesn't need root.
-RUN addgroup -S strfry && adduser -S -G strfry strfry && \
-    chown -R strfry:strfry /data/strfry
-USER strfry
-
-ENTRYPOINT ["/usr/local/bin/strfry", "--config=/etc/strfry.conf", "relay"]
+ENTRYPOINT ["/app/strfry", "--config=/etc/strfry.conf"]
+CMD ["relay"]

@@ -43,38 +43,40 @@ oc-relay-infra/
 ├── ABUSE.md              what we accept, what we reject, takedown policy, transparency log
 ├── LICENSE               MIT
 ├── strfry.conf           the production relay config (kind allowlist, retention, no-auth)
-├── Dockerfile            pinned strfry image + Caddy for TLS
-├── compose.yaml          docker-compose for Hetzner / Fly
+├── Dockerfile            pinned strfry image + Deno for the policy plugin
+├── fly.toml              Fly.io deploy config (single region fra, 50 GB volume)
 ├── policy/
 │   └── oc-dtag-filter.ts strfry write-policy plugin (Deno) — d-tag prefix gate
 ├── sync/
 │   └── backfill.sh       negentropy sync from public relays, cold-start + quarterly
-├── monitoring/
-│   └── health.ts         /health JSON probe (consumed by status.ochk.io)
-└── deploy/
-    └── hetzner-init.sh   cloud-init bootstrap (NOT executed automatically)
+└── monitoring/
+    └── health.ts         /health JSON probe (consumed by status.ochk.io)
 ```
 
-## Deployment status
+## Deployment
 
-**Phase 0 — repo scaffold.** ✅ This file set is reviewed and ready.
+Hosted on **Fly.io**, single region `fra` (Frankfurt). Fly handles TLS termination at the edge and proxies wss://relay.ochk.io → strfry:7777 over the private network. Persistent storage is a 50 GiB Fly Volume mounted at `/data/strfry/db`.
 
-**Phase 1 — Hetzner provision + DNS.** ⏳ Pending human approval of the open questions in this README's footer.
+```bash
+flyctl deploy                                     # build + ship
+flyctl certs add relay.ochk.io                    # attach DNS, request Let's Encrypt
+flyctl ssh console -C "/usr/local/bin/oc-relay-backfill"   # cold-start negentropy sync
+flyctl logs                                       # tail
+```
 
-**Phase 2 — read-side fallback.** Not started.
+**Phase 0 — repo scaffold.** ✅ Done.
+**Phase 1 — Fly provision + DNS + client co-publish.** ✅ Done (this commit).
+**Phase 2 — read-side fallback + family-vitals switchover.** Not started.
+**Phase 3 — family indexer endpoint + npm consolidation.** Not started.
 
-**Phase 3 — family indexer + npm consolidation.** Not started.
+## Decisions
 
-## Open questions for review
-
-These need explicit human decision before Phase 1:
-
-1. **Domain.** `relay.ochk.io` recommended (matches the subdomain-per-product convention). Alternative: `nostr.ochk.io` (more discoverable, but implies more Nostr surface).
-2. **Hosting.** Hetzner Cloud (CX22, fsn1-dc14, ~€5/mo) recommended. Alternative: Fly.io. Hetzner gets us off Vercel single-platform; Fly.io is anycast (overkill for one region).
-3. **Cost ceiling.** Year-one estimate: <€30/mo total (compute + 50 GB block storage + monitoring). Confirm cap.
-4. **Transparency log.** Publish takedown decisions (kind + d-tag + date, never event content) at `relay.ochk.io/transparency`? Recommended yes — defensible without putting us in the content-judgment business.
-5. **On-call.** William primary; secondary TBD. Year one accepts "may stay down until next business day"? Recommended yes (BYPASS invariant — public relays still serve).
-6. **Migration order.** Include `oc-attest-web`'s 9-relay `SERVICE_KEY_RELAYS` set in Phase 1? Recommended yes (one-line change, zero risk).
+- **Domain:** `relay.ochk.io` (matches the subdomain-per-product convention).
+- **Hosting:** Fly.io single region (fra). Anycast available if we ever need it.
+- **Cost ceiling:** <€30/mo year-one (compute + 50 GB volume + monitoring).
+- **Transparency log:** yes — kind + d-tag + ISO date at `relay.ochk.io/transparency`, never event content. Defensible without becoming a content judge.
+- **On-call:** William primary; year one accepts "may stay down until next business day" because the BYPASS invariant means public relays still serve everything.
+- **Migration scope:** all seven web repos in Phase 1 (`oc-attest-web` SERVICE_KEY_RELAYS included alongside the six others).
 
 ## Family relationship
 
