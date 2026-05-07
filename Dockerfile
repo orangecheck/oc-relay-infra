@@ -8,17 +8,18 @@
 # so this image only listens internally on :7777. No Caddy, no Let's Encrypt
 # bookkeeping inside the container.
 
+FROM denoland/deno:alpine-1.46.3 AS deno-source
+
 FROM dockurr/strfry:0.9.7
 
 USER root
 
-# Deno for the write-policy plugin. Slim install — we only need the binary,
-# no toolchain or stdlib.
-RUN apk add --no-cache curl unzip ca-certificates bash \
-    && curl -fsSL https://github.com/denoland/deno/releases/download/v1.46.3/deno-x86_64-unknown-linux-gnu.zip -o /tmp/deno.zip \
-    && unzip -q /tmp/deno.zip -d /usr/local/bin \
-    && rm /tmp/deno.zip \
-    && chmod +x /usr/local/bin/deno
+RUN apk add --no-cache ca-certificates bash
+
+# Deno for the write-policy plugin. Pull the alpine-built (musl) binary
+# directly from the official image — no glibc mismatch on Alpine strfry base.
+COPY --from=deno-source /usr/bin/deno /usr/local/bin/deno
+RUN chmod +x /usr/local/bin/deno
 
 # App layout. The plugin lives where strfry.conf points.
 RUN mkdir -p /data/strfry/db /data/strfry/policy /data/strfry/logs
