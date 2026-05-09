@@ -1,0 +1,90 @@
+name: CI
+
+# Pre-merge sanity gate for oc-relay-infra. The repo is mostly config
+# files (strfry.conf, Dockerfile, fly.toml) + one Deno write-policy
+# plugin. We don't have a TS / build pipeline to run; instead:
+#
+#   1. Validate strfry.conf parses (smoke parse via grep — strfry is
+#      a C++ binary not on the runner; full parse only happens on Fly).
+#   2. Type-check the Deno policy plugin via `deno check`.
+#   3. Validate Dockerfile syntax via `docker buildx build --check`.
+#
+# This catches misconfiguration before deploy.
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    config:
+        name: Config sanity
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: strfry.conf basic shape
+              run: |
+                  # No strfry binary on the runner; sanity-grep the keys
+                  # that the live relay needs. If any disappear, fail.
+                  grep -q '^db = ' strfry.conf
+                  grep -q 'allowedKinds' strfry.conf
+                  grep -q 'writePolicy' strfry.conf
+                  grep -q 'auth.enabled = false' strfry.conf || \
+                      grep -A 3 'auth.enabled' strfry.conf | grep -q 'false'
+                  echo "strfry.conf shape ok"
+
+            - name: fly.toml basic shape
+              run: |
+                  grep -q '^app = "oc-relay-ochk"' fly.toml
+                  grep -q 'primary_region = "fra"' fly.toml
+                  grep -q 'mounts' fly.toml
+                  echo "fly.toml shape ok"
+
+            - name: Verify required files present
+              run: |
+                  test -f Dockerfile
+                  test -f BYPASS.md
+                  test -f ABUSE.md
+                  test -f LICENSE
+                  test -f policy/oc-dtag-filter.ts
+                  test -f sync/backfill.sh
+                  test -f monitoring/health.ts
+                  echo "all required files present"
+
+    deno-policy:
+        name: Deno policy plugin
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: denoland/setup-deno@v2
+              with:
+                  deno-version: 'v1.46.3'
+
+            - name: Type check oc-dtag-filter.ts
+              run: deno check policy/oc-dtag-filter.ts
+
+            - name: Type check health.ts
+              run: deno check monitoring/health.ts
+
+    docker:
+        name: Docker build (no push)
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: docker/setup-buildx-action@v3
+
+            - name: Build (validate only)
+              uses: docker/build-push-action@v5
+              with:
+                  context: .
+                  push: false
+                  load: true
+                  tags: oc-relay-infra:ci
