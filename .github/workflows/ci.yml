@@ -35,8 +35,9 @@ jobs:
                   grep -q '^db = ' strfry.conf
                   grep -q 'allowedKinds' strfry.conf
                   grep -q 'writePolicy' strfry.conf
-                  grep -q 'auth.enabled = false' strfry.conf || \
-                      grep -A 3 'auth.enabled' strfry.conf | grep -q 'false'
+                  # NIP-11 anonymous-write commitment — no auth_required
+                  # in the relay-info block.
+                  grep -q 'auth_required = false' strfry.conf
                   echo "strfry.conf shape ok"
 
             - name: fly.toml basic shape
