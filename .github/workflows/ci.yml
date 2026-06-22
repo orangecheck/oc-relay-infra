@@ -33,12 +33,21 @@ jobs:
                   # No strfry binary on the runner; sanity-grep the keys
                   # that the live relay needs. If any disappear, fail.
                   grep -q '^db = ' strfry.conf
-                  grep -q 'allowedKinds' strfry.conf
+                  # strfry has NO built-in kind allowlist — the kind + d-tag
+                  # gate is the writePolicy plugin (Python since 2026-06-05).
+                  # Assert the plugin is wired and points at the live file.
                   grep -q 'writePolicy' strfry.conf
+                  grep -q 'oc-dtag-filter.py' strfry.conf
                   # NIP-11 anonymous-write commitment — no auth_required
                   # in the relay-info block.
                   grep -q 'auth_required = false' strfry.conf
                   echo "strfry.conf shape ok"
+
+            - name: write-policy plugin compiles
+              run: |
+                  # The active gate is the Python plugin; validate it parses.
+                  python3 -m py_compile policy/oc-dtag-filter.py
+                  echo "oc-dtag-filter.py compiles"
 
             - name: fly.toml basic shape
               run: |
