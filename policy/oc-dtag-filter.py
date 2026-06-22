@@ -14,7 +14,7 @@
 # is rejected with a stable, machine-readable reason.
 #
 # Source of truth for the prefix table: workspace KINDS.md / CLAUDE.md
-# (verbs 30078,30080-30086; OrangeOS 30087-30093; OC Chat 30110-30112).
+# (verbs 30078,30080-30086; OrangeOS 30087-30093; OC Chat 30110-30112 + 30114).
 # Reference: https://github.com/hoytech/strfry/blob/master/docs/plugins.md
 
 import json
@@ -40,10 +40,14 @@ ALLOWED_PREFIXES = {
     30091: ["oc-os-succ:"],
     30092: ["oc-os-ckpt:"],
     30093: ["oc-pkg:"],
-    # OC Chat (30110-30112) — a mode of OC Lock; verb-rooted d-tags.
+    # OC Chat (30110-30114) — a mode of OC Lock; verb-rooted d-tags.
     30110: ["oc-lock-chat-ch:"],
     30111: ["oc-lock-chat-msg:"],
     30112: ["oc-lock-chat-seal:"],
+    # 30114 is the discoverability directory: people listings use the
+    # oc-lock-chat-dir: namespace (SPEC §8.2.1), channel listings use the
+    # distinct oc-lock-chat-chdir: namespace (§8.3 separate-namespace rule).
+    30114: ["oc-lock-chat-dir:", "oc-lock-chat-chdir:"],
 }
 
 
