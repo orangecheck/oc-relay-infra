@@ -35,6 +35,20 @@ const ALLOWED_PREFIXES: Record<number, readonly string[]> = {
     30084: ["oc-agent-act:"],
     30085: ["oc-agent-rev:"],
     30086: ["oc-agent-sub:"],
+    // 30087 is OC Me (me.ochk.io) — billable-event / payment / rebind /
+    // payout-binding / distribution / drop envelopes, all disjoint d-tag
+    // prefixes on one kind (verifiers also read envelope.kind). This slot
+    // was previously earmarked for OrangeOS, a speculative project that was
+    // never built; OC Me is the real, live owner. Without this entry the
+    // relay silently rejected every me.ochk envelope.
+    30087: [
+        "oc-me-event:",
+        "oc-me-payment:",
+        "oc-me-rebind:",
+        "oc-me-payout-binding:",
+        "oc-me-distribution:",
+        "oc-me-drop:",
+    ],
 } as const;
 
 interface NostrEvent {

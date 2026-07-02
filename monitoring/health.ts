@@ -28,7 +28,7 @@
 
 const STRFRY_CONFIG = Deno.env.get("STRFRY_CONFIG") ?? "/etc/strfry.conf";
 
-const FAMILY_KINDS = [30078, 30080, 30081, 30082, 30083, 30084, 30085, 30086];
+const FAMILY_KINDS = [30078, 30080, 30081, 30082, 30083, 30084, 30085, 30086, 30087];
 
 interface HealthSnapshot {
     ok: boolean;

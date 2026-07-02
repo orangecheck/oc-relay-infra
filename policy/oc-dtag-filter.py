@@ -14,7 +14,7 @@
 # is rejected with a stable, machine-readable reason.
 #
 # Source of truth for the prefix table: workspace KINDS.md / CLAUDE.md
-# (verbs 30078,30080-30086; OrangeOS 30087-30093; OC Chat 30110-30112 + 30114).
+# (verbs 30078,30080-30086; OC Me 30087; OC Chat 30110-30112 + 30114).
 # Reference: https://github.com/hoytech/strfry/blob/master/docs/plugins.md
 
 import json
@@ -32,14 +32,21 @@ ALLOWED_PREFIXES = {
     30084: ["oc-agent-act:"],
     30085: ["oc-agent-rev:"],
     30086: ["oc-agent-sub:"],
-    # OrangeOS (30087-30093).
-    30087: ["oc-os-dec:"],
-    30088: ["oc-fs:"],
-    30089: ["oc-os-rec:"],
-    30090: ["oc-os-erev:"],
-    30091: ["oc-os-succ:"],
-    30092: ["oc-os-ckpt:"],
-    30093: ["oc-pkg:"],
+    # 30087 is OC Me (me.ochk.io) — billable-event / payment / rebind /
+    # payout-binding / distribution / drop envelopes, all disjoint d-tag
+    # prefixes on one kind (verifiers also read envelope.kind). This slot was
+    # once earmarked for OrangeOS, a speculative project that was never built;
+    # OC Me is the real, live owner. Before this the relay mapped 30087 to
+    # oc-os-dec: and silently rejected every me.ochk envelope. (30088-30093
+    # released with OrangeOS.)
+    30087: [
+        "oc-me-event:",
+        "oc-me-payment:",
+        "oc-me-rebind:",
+        "oc-me-payout-binding:",
+        "oc-me-distribution:",
+        "oc-me-drop:",
+    ],
     # OC Chat (30110-30114) — a mode of OC Lock; verb-rooted d-tags.
     30110: ["oc-lock-chat-ch:"],
     30111: ["oc-lock-chat-msg:"],
