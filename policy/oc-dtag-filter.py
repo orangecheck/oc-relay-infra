@@ -18,15 +18,40 @@
 # Reference: https://github.com/hoytech/strfry/blob/master/docs/plugins.md
 
 import json
+import re
 import sys
 
 ALLOWED_PREFIXES = {
     # 30078 is co-claimed by OC Attest (attestation), OC Lock (device record),
-    # and OC Pledge. Verifiers disambiguate via the envelope's `kind` field.
-    30078: ["oc-attest:", "oc-lock:", "oc-pledge:", "oc-pledge-outcome:", "oc-pledge-abandonment:"],
-    30080: ["oc-vote-poll:"],
-    30081: ["oc-vote-ballot:"],
-    30082: ["oc-vote-reveal:"],
+    # OC Pledge, and OC Chat (did:oc session record). Verifiers disambiguate via
+    # the envelope's `kind` field.
+    #
+    # Attest does NOT use a prefix: oc-attest-protocol/SPEC.md L228 and
+    # NIP_ORANGECHECK.md L39 both prescribe a BARE `["d", "<attestation_id>"]`.
+    # See BARE_ID_KINDS below — requiring an "oc-attest:" prefix here rejected
+    # every spec-conformant attestation the SDK has ever published.
+    30078: [
+        "oc-lock:",  # oc-lock-protocol SPEC.md L71, L337: "oc-lock:device:*"
+        "oc-pledge:",
+        "oc-pledge-outcome:",
+        "oc-pledge-abandonment:",
+        # Implementation-only namespace, no spec text yet: oc-chat-web publishes
+        # did:oc session records at oc-chat:device:<did_oc> (src/lib/chat/
+        # session-binding.ts L75). oc-chat-protocol SPEC §3 says the device
+        # record IS the OC Lock §3 record, so this second namespace is
+        # undocumented and brand-rooted where the family convention is
+        # verb-rooted. Accepted because it is live and load-bearing for chat
+        # sign-in; tracked as errata in KINDS.md rather than silently blessed.
+        "oc-chat:device:",
+    ],
+    # oc-vote-protocol SPEC.md L106/L195/L316 and its §12 namespace claim (L528)
+    # all use "oc-vote:<type>:" — a COLON after the verb. KINDS.md listed the
+    # hyphenated "oc-vote-poll:" form, this table copied it, and so the relay
+    # rejected every poll, ballot and reveal the shipped clients emit. Nothing
+    # has ever published the hyphenated form; the spec form is the only truth.
+    30080: ["oc-vote:poll:"],
+    30081: ["oc-vote:ballot:"],
+    30082: ["oc-vote:reveal:"],
     # 30083 is co-claimed by OC Stamp (stamp) and OC Agent (delegation).
     30083: ["oc-stamp:", "oc-agent-del:"],
     30084: ["oc-agent-act:"],
@@ -57,6 +82,12 @@ ALLOWED_PREFIXES = {
     30114: ["oc-lock-chat-dir:", "oc-lock-chat-chdir:"],
 }
 
+# Kinds where a BARE content-addressed id is a legitimate d-tag, no prefix.
+# Only OC Attest: id = sha256(canonical_message), rendered as 64 lowercase hex
+# (oc-attest-protocol SPEC.md §7). Anchored exact-match, so this widens the gate
+# by exactly one shape and cannot be used to smuggle arbitrary d-tags through.
+BARE_ID_KINDS = {30078: re.compile(r"^[0-9a-f]{64}$")}
+
 
 def d_tag_of(event):
     for tag in event.get("tags", []):
@@ -76,7 +107,8 @@ def decide(event):
     if d is None:
         return {"id": eid, "action": "reject",
                 "msg": "blocked: kind %s requires a d tag with one of %s" % (kind, allowed)}
-    if not any(d.startswith(p) for p in allowed):
+    bare = BARE_ID_KINDS.get(kind)
+    if not any(d.startswith(p) for p in allowed) and not (bare and bare.match(d)):
         return {"id": eid, "action": "reject",
                 "msg": "blocked: d tag '%s' is not an oc namespace prefix for kind %s" % (d[:32], kind)}
     return {"id": eid, "action": "accept"}

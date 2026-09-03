@@ -8,16 +8,31 @@ Only events of kinds in the family's normative range and with canonical OC `d`-t
 
 | kind | sub-protocol | required `d`-tag prefix |
 |---|---|---|
-| 30078 | OC Attest / OC Lock / OC Pledge | `oc-attest:`, `oc-lock:`, `oc-pledge:` (or `oc-pledge-outcome:`, `oc-pledge-abandonment:`) |
-| 30080 | OC Vote — poll | `oc-vote-poll:` |
-| 30081 | OC Vote — ballot | `oc-vote-ballot:` |
-| 30082 | OC Vote — reveal | `oc-vote-reveal:` |
+| 30078 | OC Attest / OC Lock / OC Pledge / OC Chat | a bare 64-hex `attestation_id` (OC Attest), or `oc-lock:`, `oc-pledge:`, `oc-pledge-outcome:`, `oc-pledge-abandonment:`, `oc-chat:device:` |
+| 30080 | OC Vote — poll | `oc-vote:poll:` |
+| 30081 | OC Vote — ballot | `oc-vote:ballot:` |
+| 30082 | OC Vote — reveal | `oc-vote:reveal:` |
 | 30083 | OC Stamp / OC Agent — delegation | `oc-stamp:` or `oc-agent-del:` |
 | 30084 | OC Agent — action | `oc-agent-act:` |
 | 30085 | OC Agent — revocation | `oc-agent-rev:` |
 | 30086 | OC Agent — sub-delegation | `oc-agent-sub:` |
+| 30087 | OC Me | `oc-me-event:`, `oc-me-payment:`, `oc-me-rebind:`, `oc-me-payout-binding:`, `oc-me-distribution:`, `oc-me-drop:` |
+| 30110 | OC Chat — channel descriptor | `oc-lock-chat-ch:` |
+| 30111 | OC Chat — channel post | `oc-lock-chat-msg:` |
+| 30112 | OC Chat — seal descriptor | `oc-lock-chat-seal:` |
+| 30114 | OC Chat — discoverability directory | `oc-lock-chat-dir:` (people), `oc-lock-chat-chdir:` (channels) |
 
-Events outside this matrix are silently rejected with `{"reason": "blocked: not an oc family event"}`. The kind allowlist is enforced by `strfry.conf`'s `events.allowedKinds`. The d-tag prefix gate is enforced by `policy/oc-dtag-filter.ts`.
+Events outside this matrix are rejected with a per-event `OK` of `false` carrying
+a `blocked: …` reason. **Both halves of the gate — the kind allowlist and the
+d-tag prefix check — are enforced solely by `policy/oc-dtag-filter.py`.** strfry
+has no built-in kind allowlist; an earlier version of this file claimed one was
+configured in `strfry.conf` (`events.allowedKinds`), which is not a directive
+that exists. If the plugin fails to start, the relay accepts *every* kind.
+
+This table is asserted against the plugin by `policy/test_policy.py`, so it
+cannot drift from the code again. It did once: the table and the plugin both
+said `oc-vote-poll:` while every shipped OC Vote client emits `oc-vote:poll:`,
+and the relay silently refused every poll, ballot and reveal.
 
 ## What we reject
 

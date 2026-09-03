@@ -43,10 +43,11 @@ oc-relay-infra/
 ├── ABUSE.md              what we accept, what we reject, takedown policy, transparency log
 ├── LICENSE               MIT
 ├── strfry.conf           the production relay config (kind allowlist, retention, no-auth)
-├── Dockerfile            pinned strfry image + Deno for the policy plugin
+├── Dockerfile            pinned strfry image + python3 for the policy plugin
 ├── fly.toml              Fly.io deploy config (single region fra, 50 GB volume)
 ├── policy/
-│   └── oc-dtag-filter.ts strfry write-policy plugin (Deno) — d-tag prefix gate
+│   ├── oc-dtag-filter.py strfry write-policy plugin (Python) — kind + d-tag gate
+│   └── test_policy.py     asserts the gate accepts what shipped clients emit
 ├── sync/
 │   └── backfill.sh       negentropy sync from public relays, cold-start + quarterly
 └── monitoring/

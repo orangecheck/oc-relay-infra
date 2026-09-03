@@ -49,6 +49,15 @@ jobs:
                   python3 -m py_compile policy/oc-dtag-filter.py
                   echo "oc-dtag-filter.py compiles"
 
+            - name: write-policy accepts what the clients emit
+              run: |
+                  # Compiling is not enough. The plugin rejected every OC Vote
+                  # and OC Attest event for months while compiling perfectly:
+                  # its prefix table was copied from a KINDS.md that had drifted
+                  # from the specs. This asserts the gate against the literal
+                  # d-tags the shipped publishers build.
+                  python3 policy/test_policy.py
+
             - name: fly.toml basic shape
               run: |
                   grep -q '^app = "oc-relay-ochk"' fly.toml
