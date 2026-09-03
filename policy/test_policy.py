@@ -97,8 +97,33 @@ for cited in set(re.findall(r"`(oc-[a-z-]+:[a-z-]*:?)`", table)):
 if 30078 in policy.BARE_ID_KINDS and "64-hex" not in table:
     failures.append("  ABUSE.md kind 30078 row does not mention the bare 64-hex attestation id")
 
+# The docs also state the allowed KIND range in prose, in both files. That
+# sentence said "30078-30086" long after 30087 (OC Me) and 30110-30114 (OC
+# Chat) were added to the plugin — a whole product's kind missing from the
+# integrator-facing description of what the relay accepts. Derive the range
+# from the plugin and assert both files carry it.
+def _kind_ranges(kinds):
+    runs, start, prev = [], kinds[0], kinds[0]
+    for k in kinds[1:]:
+        if k == prev + 1:
+            prev = k
+            continue
+        runs.append((start, prev))
+        start = prev = k
+    runs.append((start, prev))
+    return ", ".join(f"{a}" if a == b else f"{a}\u2013{b}" for a, b in runs)
+
+expected_range = _kind_ranges(sorted(policy.ALLOWED_PREFIXES))
+readme = (pathlib.Path(__file__).parent.parent / "README.md").read_text()
+for doc_name, doc in (("ABUSE.md", abuse), ("README.md", readme)):
+    if expected_range not in doc:
+        failures.append(
+            f"  {doc_name} does not state the plugin's kind range verbatim\n"
+            f"      expected: {expected_range}"
+        )
+
 if failures:
     print(f"policy: {len(failures)} failing case(s)\n")
     print("\n\n".join(failures))
     sys.exit(1)
-print(f"policy: {len(EMITTED)} emitted d-tags accepted, {len(BLOCKED) + 1} non-conforming rejected,\n        ABUSE.md matrix matches the plugin")
+print(f"policy: {len(EMITTED)} emitted d-tags accepted, {len(BLOCKED) + 1} non-conforming rejected,\n        ABUSE.md matrix + both docs' kind range match the plugin ({expected_range})")

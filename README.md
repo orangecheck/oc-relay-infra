@@ -8,8 +8,8 @@ Infrastructure repo for **`wss://relay.ochk.io`** — the OrangeCheck family's f
 
 A single-region [strfry](https://github.com/hoytech/strfry) instance, configured to:
 
-1. Accept the family's eight Nostr kinds (30078–30086) and reject everything else.
-2. Additionally reject events that don't carry a canonical OC `d`-tag prefix (`oc-pledge:`, `oc-stamp:`, `oc-agent-del:`, etc.) — the curation that turns a generic 30078–30086 relay into a *family* relay.
+1. Accept the family's Nostr kinds (30078, 30080–30087, 30110–30112, 30114 — 13 of them) and reject everything else.
+2. Additionally reject events that don't carry a canonical OC `d`-tag prefix (`oc-pledge:`, `oc-stamp:`, `oc-agent-del:`, etc. — plus a bare 64-hex `attestation_id`, which is what OC Attest's spec prescribes) — the curation that turns a generic relay into a *family* relay. The authoritative table is `policy/oc-dtag-filter.py`; `ABUSE.md` republishes it and `policy/test_policy.py` asserts the two agree.
 3. Sync historical events from `nos.lol`, `relay.nostr.band`, `relay.primal.net`, and `offchain.pub` via [negentropy](https://github.com/hoytech/strfry/blob/master/docs/negentropy.md).
 4. Serve a small `/health` endpoint with `{event_count, last_event_at, lmdb_size_bytes, kind_distribution}` for monitoring + the family-vitals widget on `ochk.io`.
 

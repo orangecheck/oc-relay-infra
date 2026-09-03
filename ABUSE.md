@@ -36,8 +36,8 @@ and the relay silently refused every poll, ballot and reveal.
 
 ## What we reject
 
-- Events of any kind outside 30078–30086.
-- Kind-30078–30086 events whose `d` tag does not start with one of the OC prefixes above.
+- Events of any kind outside 30078, 30080–30087, 30110–30112, 30114.
+- Events on an allowed kind whose `d` tag does not start with one of the OC prefixes above (the one exception being a bare 64-hex `attestation_id` on kind 30078, which is the form `oc-attest-protocol` SPEC §7 prescribes).
 - Events whose BIP-322 / Schnorr signatures don't verify (strfry's built-in check).
 - Events larger than 128 KiB (the `events.maxEventSize` ceiling, comfortably above the largest envelope in the family's test vectors).
 
