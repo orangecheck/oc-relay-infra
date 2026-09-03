@@ -1,12 +1,13 @@
 name: CI
 
 # Pre-merge sanity gate for oc-relay-infra. The repo is mostly config
-# files (strfry.conf, Dockerfile, fly.toml) + one Deno write-policy
+# files (strfry.conf, Dockerfile, fly.toml) + one Python write-policy
 # plugin. We don't have a TS / build pipeline to run; instead:
 #
 #   1. Validate strfry.conf parses (smoke parse via grep — strfry is
 #      a C++ binary not on the runner; full parse only happens on Fly).
-#   2. Type-check the Deno policy plugin via `deno check`.
+#   2. Run the write-policy plugin against the d-tags the shipped
+#      clients emit, and type-check the (undeployed) Deno health probe.
 #   3. Validate Dockerfile syntax via `docker buildx build --check`.
 #
 # This catches misconfiguration before deploy.
@@ -71,13 +72,14 @@ jobs:
                   test -f BYPASS.md
                   test -f ABUSE.md
                   test -f LICENSE
-                  test -f policy/oc-dtag-filter.ts
+                  test -f policy/oc-dtag-filter.py
+                  test -f policy/test_policy.py
                   test -f sync/backfill.sh
                   test -f monitoring/health.ts
                   echo "all required files present"
 
-    deno-policy:
-        name: Deno policy plugin
+    deno-health-probe:
+        name: Deno health probe
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v5
@@ -85,9 +87,6 @@ jobs:
             - uses: denoland/setup-deno@v2
               with:
                   deno-version: 'v1.46.3'
-
-            - name: Type check oc-dtag-filter.ts
-              run: deno check policy/oc-dtag-filter.ts
 
             - name: Type check health.ts
               run: deno check monitoring/health.ts

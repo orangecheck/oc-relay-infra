@@ -1,5 +1,12 @@
 #!/usr/bin/env -S deno run --allow-net=0.0.0.0:8080 --allow-run --allow-read
 //
+// NOT DEPLOYED. The Dockerfile does not copy this file into the image, port
+// 8080 is not exposed, and fly.toml health-checks TCP 7777 directly — so
+// nothing serves /health today. README used to say it was "consumed by
+// status.ochk.io", which is not a site that exists. Kept because it is the
+// right shape for a status surface to consume later; wire the COPY, the port
+// and a services.http_checks block together when that happens.
+//
 // /health — JSON probe for relay.ochk.io
 //
 // Consumed by:

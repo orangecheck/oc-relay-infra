@@ -51,7 +51,10 @@ oc-relay-infra/
 ├── sync/
 │   └── backfill.sh       negentropy sync from public relays, cold-start + quarterly
 └── monitoring/
-    └── health.ts         /health JSON probe (consumed by status.ochk.io)
+    └── health.ts         /health JSON probe — NOT DEPLOYED. The Dockerfile
+                          never copies it and fly.toml health-checks TCP 7777
+                          directly, so nothing serves this. Kept for when a
+                          status surface wants it.
 ```
 
 ## Deployment
