@@ -1,6 +1,8 @@
 # BYPASS — every relay.ochk.io feature has a public-relay equivalent
 
-This file is the family's promise that **`relay.ochk.io` is never the only copy of anything**. Every event that lands on it also lands on at least three of `nos.lol`, `relay.nostr.band`, `relay.primal.net`, `offchain.pub` (the public relay set the family has used since day one). Every read path that consults `relay.ochk.io` also races at least three public relays. If `relay.ochk.io` disappeared tomorrow, every OC verifier in the field would still verify every OC envelope.
+This file is the family's promise that **`relay.ochk.io` is never the only copy of anything**. Every client publishes each event to `relay.ochk.io` and to the public set — `nos.lol`, `relay.primal.net`, `offchain.pub`, `relay.snort.social` — and every read path races them all. If `relay.ochk.io` disappeared tomorrow, every OC verifier in the field should still find and verify every OC envelope.
+
+**Today that promise does not hold.** Publishing to a public relay is not storage: those relays prune. Measured 2026-10-07, none of the 33 family events on `relay.ochk.io` (kinds 30078, 30080, 30081, 30087, 30110–30112, 30114) exist on any of the four relays above or on `relay.damus.io`, and OC Vote's only poll had to be restored from a signed copy after `nos.lol` dropped it. The only second copy is the Fly volume's daily snapshot, kept five days, with the same provider. Restoring the invariant needs a copy that no relay operator, OC included, can prune: an export of every family event to storage outside Fly.
 
 The pattern mirrors [`oc-guardian-kit/BYPASS.md`](https://github.com/orangecheck/oc-guardian-kit/blob/main/BYPASS.md): infrastructure parity is not a configuration choice, it's an architectural invariant.
 
@@ -8,28 +10,15 @@ The pattern mirrors [`oc-guardian-kit/BYPASS.md`](https://github.com/orangecheck
 
 | feature | relay.ochk.io path | public-only path |
 |---|---|---|
-| Publish a kind-30078 OC Pledge envelope | client publishes to relay.ochk.io + 4 public relays | client publishes to 4 public relays alone (always has, always will) |
+| Publish a kind-30078 OC Pledge envelope | client publishes to relay.ochk.io + 4 public relays | client publishes to 4 public relays alone |
 | Read all pledges sworn by `bc1q…` | client queries relay.ochk.io + 4 public relays, dedupes by event id | client queries 4 public relays, dedupes by event id |
 | Family-vitals counts on `ochk.io` | NIP-45 COUNT on relay.ochk.io with d-tag prefix filter | NIP-45 COUNT on `nos.lol` (the path the homepage used pre-relay), or fan-out on the four public relays |
-| Backfill historical envelopes | strfry negentropy sync from public relays *into* relay.ochk.io | not needed — public relays already have them |
+| Backfill historical envelopes | strfry negentropy sync from public relays *into* relay.ochk.io | none today — public relays do not keep them (see above) |
 | Audit log of takedown requests | `relay.ochk.io/transparency` (kind + d-tag + date only, never event content) | request takedown directly with the public relay operator, governed by their abuse policy |
 
-## Build-time invariants (will land in Phase 3)
+## Build-time invariant
 
-Once `@orangecheck/nostr-core` is extracted to `oc-packages`, the package's published `DEFAULT_RELAYS` constant gets these invariants enforced at the type level:
-
-```ts
-// Build fails if a future engineer simplifies to ours-only.
-type Invariant = DEFAULT_RELAYS extends readonly [...infer R]
-    ? R['length'] extends 0 | 1
-        ? never
-        : R extends readonly ['wss://relay.ochk.io']
-        ? never
-        : R
-    : never;
-```
-
-These are not enforced today. They will be enforced before `relay.ochk.io` is added as a default in any consumer.
+`@orangecheck/nostr-core`'s `DEFAULT_RELAYS` is typed `ValidRelaySet`, so `tsc` fails if the set shrinks to one relay or to `relay.ochk.io` alone. That guards the publish path. It cannot guard retention, which is what failed.
 
 ## Why this matters
 
