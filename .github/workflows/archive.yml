@@ -1,0 +1,48 @@
+name: Archive
+
+# Public relays prune, so relay.ochk.io was the only copy of most family events.
+# This keeps a verified second copy in git, on the `archive` branch, off Fly.
+on:
+    schedule:
+        - cron: '17 4 * * *'
+    workflow_dispatch:
+
+concurrency:
+    group: archive
+    cancel-in-progress: false
+
+permissions:
+    contents: write
+
+jobs:
+    archive:
+        name: Archive family events
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v5
+
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: '24'
+
+            - name: Fetch, verify, write
+              run: python3 sync/archive.py "$RUNNER_TEMP/events.jsonl"
+
+            - name: Commit to the archive branch if anything changed
+              run: |
+                  git fetch origin archive:archive 2>/dev/null || true
+                  if git rev-parse --verify -q archive >/dev/null; then
+                    git worktree add "$RUNNER_TEMP/archive" archive
+                  else
+                    git worktree add --orphan -b archive "$RUNNER_TEMP/archive"
+                  fi
+                  cd "$RUNNER_TEMP/archive"
+                  cp "$RUNNER_TEMP/events.jsonl" events.jsonl
+                  git add events.jsonl
+                  if git diff --cached --quiet; then
+                    echo "archive unchanged"
+                    exit 0
+                  fi
+                  git -c user.name=Xaxis -c user.email=william.neeley@gmail.com \
+                    commit -q -m "archive: $(wc -l < events.jsonl) family events from relay.ochk.io"
+                  git push origin archive
