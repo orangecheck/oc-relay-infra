@@ -16,7 +16,7 @@ Only events of kinds in the family's normative range and with canonical OC `d`-t
 | 30084 | OC Agent — action | `oc-agent-act:` |
 | 30085 | OC Agent — revocation | `oc-agent-rev:` |
 | 30086 | OC Agent — sub-delegation | `oc-agent-sub:` |
-| 30087 | OC Me | `oc-me-event:`, `oc-me-payment:`, `oc-me-rebind:`, `oc-me-payout-binding:`, `oc-me-distribution:`, `oc-me-drop:` |
+| 30087 | OC Me | `oc-me-event:`, `oc-me-payment:`, `oc-me-rebind:`, `oc-me-trust:`, `oc-me-payout-binding:`, `oc-me-distribution:`, `oc-me-drop:` |
 | 30110 | OC Chat — channel descriptor | `oc-lock-chat-ch:` |
 | 30111 | OC Chat — channel post | `oc-lock-chat-msg:` |
 | 30112 | OC Chat — seal descriptor | `oc-lock-chat-seal:` |

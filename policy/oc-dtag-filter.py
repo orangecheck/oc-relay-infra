@@ -57,7 +57,7 @@ ALLOWED_PREFIXES = {
     30084: ["oc-agent-act:"],
     30085: ["oc-agent-rev:"],
     30086: ["oc-agent-sub:"],
-    # 30087 is OC Me (me.ochk.io) — billable-event / payment / rebind /
+    # 30087 is OC Me (me.ochk.io) — billable-event / payment / rebind / trust /
     # payout-binding / distribution / drop envelopes, all disjoint d-tag
     # prefixes on one kind (verifiers also read envelope.kind). This slot was
     # once earmarked for OrangeOS, a speculative project that was never built;
@@ -68,6 +68,7 @@ ALLOWED_PREFIXES = {
         "oc-me-event:",
         "oc-me-payment:",
         "oc-me-rebind:",
+        "oc-me-trust:",
         "oc-me-payout-binding:",
         "oc-me-distribution:",
         "oc-me-drop:",

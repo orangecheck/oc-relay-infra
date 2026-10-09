@@ -43,7 +43,12 @@ EMITTED = [
     (30083, f"oc-agent-del:{ID}", "oc-agent-web src/lib/nostr/event.ts:63"),
     (30085, f"oc-agent-rev:{ID}", "oc-agent-web src/lib/nostr/event.ts:97"),
     (30087, f"oc-me-event:{ID}", "oc-me-web (billable event envelope)"),
+    (30087, f"oc-me-payment:{ID}", "oc-me-web (payment envelope)"),
     (30087, f"oc-me-rebind:{ID}", "oc-me-web (rebind envelope)"),
+    (30087, f"oc-me-trust:{ID}", "oc-me-web src/lib/nostr/event.ts D_PREFIX.trust_attestation"),
+    (30087, f"oc-me-payout-binding:{ID}", "oc-me-web (payout binding)"),
+    (30087, f"oc-me-distribution:{ID}", "oc-me-web (distribution)"),
+    (30087, f"oc-me-drop:{ID}", "oc-me-web (drop manifest)"),
 ]
 
 # The gate must still be a gate. Every one MUST be rejected.
