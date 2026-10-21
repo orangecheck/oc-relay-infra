@@ -28,7 +28,7 @@ Five web repos in the family currently document the empirical failure mode:
 
 > "`relay.damus.io` and `relay.snort.social` aggressively reject events from fresh pubkeys with no WoT history (which is what a no-NIP-07 publish produces), so they're excluded from the write path here."
 
-— [`oc-pledge-web/src/lib/nostr/client.ts:9-14`](https://github.com/orangecheck/oc-pledge-web/blob/main/src/lib/nostr/client.ts#L9-L14) (and four siblings, drift between them already visible).
+— the relay client in `oc-pledge-web`, a private repo (and four siblings, drift between them already visible).
 
 `oc-fleet-web/src/pages/api/cron/republish-nostr.ts` exists *because* request-path publishes drop. A Vercel Cron retries every 5 minutes. That cron is a workaround for the gap a first-party relay closes.
 
