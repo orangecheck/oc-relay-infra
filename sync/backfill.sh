@@ -16,16 +16,16 @@
 set -euo pipefail
 
 RELAYS=(
-    "wss://relay.nostr.band"
+    "wss://relay.damus.io"
     "wss://nos.lol"
     "wss://relay.primal.net"
     "wss://offchain.pub"
 )
 
-# Family kinds: 30078 (attest/lock/pledge), 30080–30082 (vote), 30083 (stamp/
-# agent-delegation), 30084 (agent-action), 30085 (agent-revocation), 30086
-# (agent-sub-delegation).
-FILTER='{"kinds":[30078,30080,30081,30082,30083,30084,30085,30086]}'
+# Family kinds: every kind policy/oc-dtag-filter.py accepts. 30078 (attest/
+# lock/pledge/chat devices), 30080–30082 (vote), 30083 (stamp/agent-delegation),
+# 30084–30086 (agent), 30087 (OC Me), 30110–30112 + 30114 (OC Chat).
+FILTER='{"kinds":[30078,30080,30081,30082,30083,30084,30085,30086,30087,30110,30111,30112,30114]}'
 
 CONFIG="${STRFRY_CONFIG:-/etc//app/strfry.conf}"
 
@@ -37,4 +37,4 @@ for relay in "${RELAYS[@]}"; do
 done
 
 echo "[$(date -u +%FT%TZ)] backfill complete; current event count:"
-/app/strfry --config="${CONFIG}" scan '{"kinds":[30078,30080,30081,30082,30083,30084,30085,30086]}' | wc -l
+/app/strfry --config="${CONFIG}" scan "${FILTER}" | wc -l
