@@ -19,7 +19,7 @@ RELAYS=(
     "wss://relay.damus.io"
     "wss://nos.lol"
     "wss://relay.primal.net"
-    "wss://offchain.pub"
+    "wss://nostr.oxtr.dev"
 )
 
 # Family kinds: every kind policy/oc-dtag-filter.py accepts. 30078 (attest/
