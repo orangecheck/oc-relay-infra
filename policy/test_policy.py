@@ -48,6 +48,7 @@ EMITTED = [
     (30087, f"oc-me-trust:{ID}", "oc-me-web src/lib/nostr/event.ts D_PREFIX.trust_attestation"),
     (30087, f"oc-me-payout-binding:{ID}", "oc-me-web (payout binding)"),
     (30087, f"oc-me-distribution:{ID}", "oc-me-web (distribution)"),
+    (30087, f"oc-me-distribution-void:{ID}", "oc-me-web (distribution void)"),
     (30087, f"oc-me-drop:{ID}", "oc-me-web (drop manifest)"),
 ]
 

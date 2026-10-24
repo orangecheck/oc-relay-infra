@@ -58,7 +58,7 @@ ALLOWED_PREFIXES = {
     30085: ["oc-agent-rev:"],
     30086: ["oc-agent-sub:"],
     # 30087 is OC Me (me.ochk.io) — billable-event / payment / rebind / trust /
-    # payout-binding / distribution / drop envelopes, all disjoint d-tag
+    # payout-binding / distribution / distribution-void / drop envelopes, all disjoint d-tag
     # prefixes on one kind (verifiers also read envelope.kind). This slot was
     # once earmarked for OrangeOS, a speculative project that was never built;
     # OC Me is the real, live owner. Before this the relay mapped 30087 to
@@ -71,6 +71,7 @@ ALLOWED_PREFIXES = {
         "oc-me-trust:",
         "oc-me-payout-binding:",
         "oc-me-distribution:",
+        "oc-me-distribution-void:",
         "oc-me-drop:",
     ],
     # OC Chat (30110-30114) — a mode of OC Lock; verb-rooted d-tags.
