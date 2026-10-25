@@ -11,7 +11,8 @@ A single-region [strfry](https://github.com/hoytech/strfry) instance, configured
 1. Accept the family's Nostr kinds (30078, 30080–30087, 30110–30112, 30114 — 13 of them) and reject everything else.
 2. Additionally reject events that don't carry a canonical OC `d`-tag prefix (`oc-pledge:`, `oc-stamp:`, `oc-agent-del:`, etc. — plus a bare 64-hex `attestation_id`, which is what OC Attest's spec prescribes) — the curation that turns a generic relay into a *family* relay. The authoritative table is `policy/oc-dtag-filter.py`; `ABUSE.md` republishes it and `policy/test_policy.py` asserts the two agree.
 3. Sync historical events from `relay.damus.io`, `nos.lol`, `relay.primal.net`, and `nostr.oxtr.dev` via [negentropy](https://github.com/hoytech/strfry/blob/master/docs/negentropy.md).
-4. Answer `/health` from `oc-relay-front`: strfry's NIP-11 name, version and supported NIPs, read over loopback, plus `source_unknown`, the count of requests that came without a usable `Fly-Client-IP`. Fly's health check and analytics.ochk.io read it.
+4. Act as OC Chat's named directory relay: a kind-30114 record that passes the prefix gate must also pass the claim rule of OC Chat §8.2.6, checked by `policy/dir-gate/` with the published rule (`@orangecheck/lock-core/directory`). See `ABUSE.md`.
+5. Answer `/health` from `oc-relay-front`: strfry's NIP-11 name, version and supported NIPs, read over loopback, plus `source_unknown`, the count of requests that came without a usable `Fly-Client-IP`. Fly's health check and analytics.ochk.io read it.
 
 ## Visitor addresses
 
@@ -19,7 +20,7 @@ strfry stores a source with every event and logs it on Connect. It never sees a 
 
 Fly's edge still sees each visitor's address, as Vercel does for the family's sites. At the front's first start on a volume, `boot/oc-relay-boot.sh` rewrote the store through `strfry export` and `import` into a new file, so no address stored before the front remains in it; Fly's volume snapshots held the old file until they aged out.
 
-That's it. No NIP-42 auth on writes. No paid tiers. No content moderation beyond kind + d-tag shape.
+That's it. No NIP-42 auth on writes. No paid tiers. No content moderation beyond kind + d-tag shape, and the directory's claim rule for kind 30114.
 
 ## What this is NOT
 
@@ -49,11 +50,13 @@ oc-relay-infra/
 ├── ABUSE.md              what we accept, what we reject, takedown policy, transparency log
 ├── LICENSE               MIT
 ├── strfry.conf           the production relay config (kind allowlist, retention, no-auth)
-├── Dockerfile            builds the front, then pinned strfry image + python3 for the policy plugin
+├── Dockerfile            builds the front, then pinned strfry image + python3 for the policy plugin + Node for the directory gate
 ├── fly.toml              Fly.io deploy config (single region fra, 50 GB volume)
 ├── policy/
 │   ├── oc-dtag-filter.py strfry write-policy plugin (Python) — kind + d-tag gate
-│   └── test_policy.py     asserts the gate accepts what shipped clients emit
+│   ├── dir-gate/         kind-30114 claim gate (Node sidecar the plugin runs)
+│   ├── test_policy.py     asserts the gate accepts what shipped clients emit
+│   └── test_dir_gate.py   runs the plugin and checks the 30114 bridge
 ├── sync/
 │   └── backfill.sh       negentropy sync from public relays, cold-start + quarterly
 ├── front/

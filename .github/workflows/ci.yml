@@ -72,6 +72,20 @@ jobs:
                   # d-tags the shipped publishers build.
                   python3 policy/test_policy.py
 
+            - name: kind 30114 goes to the directory gate, and nothing else does
+              run: python3 policy/test_dir_gate.py
+
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: '22'
+                  package-manager-cache: false
+
+            - name: directory gate rules
+              working-directory: policy/dir-gate
+              run: |
+                  npm ci --ignore-scripts --no-audit --no-fund
+                  node --test
+
             - name: fly.toml basic shape
               run: |
                   grep -q '^app = "oc-relay-ochk"' fly.toml
@@ -87,6 +101,10 @@ jobs:
                   test -f LICENSE
                   test -f policy/oc-dtag-filter.py
                   test -f policy/test_policy.py
+                  test -f policy/test_dir_gate.py
+                  test -f policy/dir-gate/gate.mjs
+                  test -f policy/dir-gate/rules.mjs
+                  test -f policy/dir-gate/package-lock.json
                   test -f sync/backfill.sh
                   test -f front/main.go
                   test -f boot/oc-relay-boot.sh

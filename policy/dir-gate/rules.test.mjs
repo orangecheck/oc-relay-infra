@@ -1,0 +1,289 @@
+// The kind-30114 write gate against signed records and a fake chain: what it
+// admits, what it refuses, and that every unanswered read refuses.
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { describe, it } from 'node:test';
+
+import { channelDirectoryDtag, channelId, claimId, directoryDtag } from '@orangecheck/lock-core/directory';
+import {
+    buildBindingStatement,
+    buildRevocationStatement,
+    deriveNostrKey,
+    finalizeDeviceEvent,
+    signNostrEvent,
+} from '@orangecheck/lock-device';
+import { base64Encode, serializeTimestamp } from '@orangecheck/stamp-ots';
+
+import { createGate, LIMITS } from './rules.mjs';
+
+const ADDR = 'bc1qmr7qn2t0ahj56ztpdswt54kn2r863ukd8wadj8';
+const TIP = 930_000;
+const ANCHOR = TIP - 10;
+const sha = (s) => createHash('sha256').update(s).digest('hex');
+const sk = (n) => new Uint8Array(32).fill(n);
+const nostr = (n) => deriveNostrKey(sk(n));
+
+/** A stub wallet: "sig:<address>" signs that address's statements. */
+const verifyBip322 = ({ address, message, signature }) => signature === `sig:${address}` && message.includes(`address: ${address}`);
+
+function device(n, address = ADDR) {
+    return finalizeDeviceEvent({
+        deviceSk: sk(n),
+        address,
+        device_id: `dev${n}`,
+        device_pk: 'aa'.repeat(32),
+        bindingStatement: buildBindingStatement({
+            address,
+            device_pk: 'aa'.repeat(32),
+            device_id: `dev${n}`,
+            created_at: '2026-10-01T00:00:00Z',
+            nostr_pk: nostr(n).nostrPk,
+        }),
+        bindingSigBase64: `sig:${address}`,
+        createdAtUnix: 1_790_000_000,
+    });
+}
+
+function revocation(n, address = ADDR) {
+    const { nostrSk, nostrPk } = nostr(99);
+    return signNostrEvent(
+        {
+            pubkey: nostrPk,
+            kind: 30078,
+            created_at: 1_790_000_100,
+            content: buildRevocationStatement({ address, device_id: `dev${n}`, revoked_at: '2026-10-02T00:00:00Z' }),
+            tags: [
+                ['d', `oc-lock:device:${address}`],
+                ['binding_sig', `sig:${address}`],
+            ],
+        },
+        nostrSk
+    );
+}
+
+/** A bare OpenTimestamps proof whose one Bitcoin attestation commits to `idHex` as a Merkle root. */
+const proof = (idHex, height) =>
+    base64Encode(serializeTimestamp({ msg: Buffer.from(idHex, 'hex'), attestations: [{ kind: 'bitcoin', height }], ops: [] }));
+const header = (rootHex) => {
+    const h = Buffer.alloc(80);
+    Buffer.from(rootHex, 'hex').copy(h, 36);
+    return new Uint8Array(h);
+};
+
+/** One claim per block here: the bare proof makes the claim id the block's Merkle root. */
+function claimFor(handle, { outpoint = `${'ab'.repeat(32)}:0`, nonce = sha('nonce ' + handle), address = ADDR, height = ANCHOR } = {}) {
+    const id = claimId({ handle, address, outpoint, nonce });
+    return { id, height, claim: { outpoint, nonce, ots: proof(id, height) } };
+}
+
+function listingEvent(handle, { n = 1, claim = claimFor(handle), extra = {}, d = directoryDtag(handle) } = {}) {
+    const { nostrSk, nostrPk } = nostr(n);
+    const content = { v: 2, handle, address: ADDR, inbox_pubkey: nostrPk, claim: claim.claim, opted_in: true, created_at: 1_790_000_200, ...extra };
+    return signNostrEvent({ pubkey: nostrPk, kind: 30114, created_at: 1_790_000_200, content: JSON.stringify(content), tags: [['d', d]] }, nostrSk);
+}
+
+function tombstoneEvent(handle, ends, n = 1) {
+    const { nostrSk, nostrPk } = nostr(n);
+    const content = { v: 2, handle, address: ADDR, opted_in: false, ends, created_at: 1_790_000_300 };
+    return signNostrEvent(
+        { pubkey: nostrPk, kind: 30114, created_at: 1_790_000_300, content: JSON.stringify(content), tags: [['d', directoryDtag(handle)]] },
+        nostrSk
+    );
+}
+
+/** A world: chain facts, this relay's stored events, a clock. Every read is counted. */
+function world(over = {}) {
+    const w = {
+        t: Date.parse('2026-10-25T00:00:00Z'),
+        reads: { tip: 0, header: 0, coin: 0, device: 0, stored: 0 },
+        roots: new Map(),
+        coins: new Map(),
+        devices: [device(1)],
+        stored: [],
+        ...over,
+    };
+    const deps = {
+        tip: async () => (w.reads.tip++, w.tipFails ? Promise.reject(new Error('down')) : TIP),
+        headers: {
+            getHeaderAt: async (h) => {
+                w.reads.header++;
+                if (w.headerFails) throw new Error('down');
+                return w.roots.has(h) ? header(w.roots.get(h)) : null;
+            },
+        },
+        coin: async (op) => (w.reads.coin++, w.coinHangs ? new Promise(() => {}) : (w.coins.get(op) ?? 'no-answer')),
+        deviceEvents: async () => (w.reads.device++, w.deviceFails ? 'no-answer' : w.devices),
+        stored: async (d) => (w.reads.stored++, w.stored.filter((e) => e.tags.some((t) => t[0] === 'd' && t[1] === d))),
+        allStored: async () => w.stored,
+        verifyBip322,
+        now: () => w.t,
+    };
+    return { w, deps };
+}
+
+/** Anchor a claim's proof at ANCHOR and give its coin the facts asked for. */
+function chainFor(w, claim, coin = { confirmedAt: ANCHOR - 200, value: 546, paysTo: ADDR, spendHeight: null }) {
+    w.roots.set(claim.height, claim.id);
+    w.coins.set(claim.claim.outpoint, coin);
+}
+
+const msg = (event, sourceInfo = '203.0.113.1', sourceType = 'IP4') => ({ id: event.id, event, sourceType, sourceInfo });
+
+describe('a listing', () => {
+    it('is admitted when it passes the four checks', async () => {
+        const { w, deps } = world();
+        const ev = listingEvent('alice');
+        chainFor(w, claimFor('alice'));
+        assert.deepEqual(await createGate(deps).check(msg(ev)), { action: 'accept' });
+    });
+
+    it('is refused before any read for its shape, its d tag or its signer', async () => {
+        const { w, deps } = world();
+        const gate = createGate(deps);
+        const v1 = listingEvent('alice', { extra: { v: 1 } });
+        assert.match((await gate.check(msg(v1))).msg, /^blocked: a v1 listing/);
+        assert.match((await gate.check(msg(listingEvent('alice', { d: directoryDtag('bob') })))).msg, /^invalid: the d tag/);
+        assert.match((await gate.check(msg(listingEvent('alice', { extra: { inbox_pubkey: nostr(2).nostrPk } })))).msg, /^invalid: a listing is signed by its inbox key/);
+        assert.match((await gate.check(msg(listingEvent('alice', { extra: { claim: { outpoint: 'x' } } })))).msg, /^invalid: not a v2/);
+        assert.deepEqual(w.reads, { tip: 0, header: 0, coin: 0, device: 0, stored: 0 });
+    });
+
+    it('is refused when unanchored or anchored fewer than 6 blocks deep', async () => {
+        const { w, deps } = world();
+        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /^invalid: the claim is not anchored/);
+        const near = claimFor('alice');
+        near.claim.ots = proof(near.id, TIP - 4);
+        w.roots.set(TIP - 4, near.id);
+        const gate = createGate(deps);
+        const before = w.reads.header;
+        assert.match((await gate.check(msg(listingEvent('alice', { claim: near })))).msg, /6 confirmations/);
+        // A header this near the tip is never cached: it can still change.
+        assert.match((await gate.check(msg(listingEvent('alice', { claim: near })))).msg, /6 confirmations/);
+        assert.equal(w.reads.header - before, 2);
+        assert.equal(w.reads.device, 0);
+    });
+
+    it('is refused when its key is not bound, or is bound by a revoked record', async () => {
+        const { w, deps } = world({ devices: [device(2)] });
+        chainFor(w, claimFor('alice'));
+        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /not bound to the address/);
+        w.devices = [device(1), revocation(1)];
+        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /not bound to the address/);
+    });
+
+    it('is refused when its coin does not clear the floor at the anchor', async () => {
+        const { w, deps } = world();
+        chainFor(w, claimFor('alice'), { confirmedAt: ANCHOR - 143, value: 546, paysTo: ADDR, spendHeight: null });
+        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /coin does not hold it/);
+    });
+
+    it('a channel listing goes through the same gate under its founder fields', async () => {
+        const { w, deps } = world();
+        const { nostrSk, nostrPk } = nostr(1);
+        const c = claimFor('builders');
+        chainFor(w, c);
+        const content = (cid) => ({
+            v: 2,
+            handle: 'builders',
+            slug: 'bitcoin-talk',
+            channel_id: cid,
+            founder_address: ADDR,
+            founder_inbox_pubkey: nostrPk,
+            title: 'Bitcoin talk',
+            claim: c.claim,
+            opted_in: true,
+            created_at: 1_790_000_200,
+        });
+        const ev = (cid) =>
+            signNostrEvent(
+                { pubkey: nostrPk, kind: 30114, created_at: 1_790_000_200, content: JSON.stringify(content(cid)), tags: [['d', channelDirectoryDtag('builders')]] },
+                nostrSk
+            );
+        assert.deepEqual(await createGate(deps).check(msg(ev(channelId(ADDR, 'bitcoin-talk')))), { action: 'accept' });
+        assert.match((await createGate(deps).check(msg(ev(channelId(ADDR, 'other'))))).msg, /^invalid: not a v2/);
+    });
+});
+
+describe('a read without an answer refuses, never admits', () => {
+    for (const [name, set] of [
+        ['the tip', (w) => (w.tipFails = true)],
+        ['a header', (w) => (w.headerFails = true)],
+        ['the coin', (w) => w.coins.clear()],
+        ['the device records', (w) => (w.deviceFails = true)],
+    ]) {
+        it(name, async () => {
+            const { w, deps } = world();
+            chainFor(w, claimFor('alice'));
+            set(w);
+            assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /^rate-limited: /);
+            // Cheapest first: an anchor that cannot be read costs no binding read.
+            if (name !== 'the coin' && name !== 'the device records') assert.equal(w.reads.device, 0);
+        });
+    }
+
+    it('a hung read is cut off at the deadline', { timeout: 2000 }, async () => {
+        const { w, deps } = world();
+        chainFor(w, claimFor('alice'));
+        w.coinHangs = true;
+        const started = Date.now();
+        const out = await createGate(deps, { ...LIMITS, deadlineMs: 50 }).check(msg(listingEvent('alice')));
+        assert.match(out.msg, /^rate-limited: the directory check took too long/);
+        assert.ok(Date.now() - started < 1000);
+    });
+});
+
+describe('limits', () => {
+    it('six 30114 writes a minute per IP; other sources count apart', async () => {
+        const { w, deps } = world();
+        chainFor(w, claimFor('alice'));
+        const gate = createGate(deps);
+        const ev = listingEvent('alice');
+        for (let i = 0; i < 6; i++) assert.equal((await gate.check(msg(ev))).action, 'accept');
+        assert.match((await gate.check(msg(ev))).msg, /^rate-limited: too many directory writes/);
+        assert.equal((await gate.check(msg(ev, '203.0.113.2'))).action, 'accept');
+        assert.equal((await gate.check(msg(ev, 'wss://elsewhere', 'Sync'))).action, 'accept');
+        w.t += 60_000;
+        assert.equal((await gate.check(msg(ev))).action, 'accept');
+    });
+
+    it('a spent chain budget refuses, and cached facts cost nothing', async () => {
+        const { w, deps } = world();
+        chainFor(w, claimFor('alice'));
+        const gate = createGate(deps, { ...LIMITS, chainReads: 3, perIp: 100 });
+        assert.equal((await gate.check(msg(listingEvent('alice')))).action, 'accept');
+        assert.equal((await gate.check(msg(listingEvent('alice')))).action, 'accept');
+        assert.deepEqual([w.reads.tip, w.reads.header, w.reads.coin], [1, 1, 1]);
+        const other = claimFor('bob', { outpoint: `${'cd'.repeat(32)}:1`, height: ANCHOR - 1 });
+        w.coins.set(other.claim.outpoint, { confirmedAt: ANCHOR - 200, value: 546, paysTo: ADDR, spendHeight: null });
+        assert.match((await gate.check(msg(listingEvent('bob', { claim: other })))).msg, /^rate-limited: /);
+    });
+
+    it('one live claim per coin; a tombstoned one frees it', async () => {
+        const { w, deps } = world();
+        const a = claimFor('alice');
+        chainFor(w, a);
+        const gate = createGate(deps);
+        const first = listingEvent('alice', { claim: a });
+        assert.equal((await gate.check(msg(first))).action, 'accept');
+        w.stored.push(first);
+        const b = claimFor('alice2', { height: ANCHOR - 1 });
+        w.roots.set(b.height, b.id);
+        const second = listingEvent('alice2', { claim: b });
+        assert.match((await gate.check(msg(second))).msg, /^blocked: this coin already backs another live claim/);
+        w.stored.push(tombstoneEvent('alice', a.id));
+        assert.equal((await gate.check(msg(second))).action, 'accept');
+    });
+});
+
+describe('a tombstone', () => {
+    it('is admitted when a bound key signs it and it ends a claim this relay holds', async () => {
+        const { w, deps } = world();
+        const a = claimFor('alice');
+        w.stored.push(listingEvent('alice', { claim: a }));
+        const gate = createGate(deps);
+        assert.deepEqual(await gate.check(msg(tombstoneEvent('alice', a.id))), { action: 'accept' });
+        assert.match((await gate.check(msg(tombstoneEvent('alice', sha('other'))))).msg, /must end a claim this relay holds/);
+        assert.match((await gate.check(msg(tombstoneEvent('alice', a.id, 3)))).msg, /not bound to the address/);
+        assert.equal(w.reads.tip + w.reads.coin + w.reads.header, 0);
+    });
+});

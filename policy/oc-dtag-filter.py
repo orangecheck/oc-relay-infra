@@ -18,8 +18,12 @@
 # Reference: https://github.com/hoytech/strfry/blob/master/docs/plugins.md
 
 import json
+import os
 import re
+import select
+import subprocess
 import sys
+import time
 
 ALLOWED_PREFIXES = {
     # 30078 is co-claimed by OC Attest (attestation), OC Lock (device record),
@@ -116,7 +120,83 @@ def decide(event):
     return {"id": eid, "action": "accept"}
 
 
+# Kind 30114 is the OC Chat directory. relay.ochk.io is its named directory
+# relay (oc-chat-protocol SPEC §8.2.6), so a 30114 event that passes the prefix
+# gate is also checked against the claim rule by a Node sidecar that runs the
+# rule's one implementation (@orangecheck/lock-core/directory). strfry waits for
+# each answer before the next event, so the sidecar gets GATE_TIMEOUT_S; a late,
+# dead or garbled sidecar is a refusal, never an admission. Other kinds never
+# reach it.
+DIR_KIND = 30114
+GATE_CMD = json.loads(os.environ.get("OC_DIR_GATE_CMD") or "null") or [
+    "/opt/node/lib/ld-musl-x86_64.so.1", "--library-path", "/opt/node/lib",
+    "/opt/node/bin/node", "/data/strfry/policy/dir-gate/gate.mjs",
+]
+GATE_TIMEOUT_S = float(os.environ.get("OC_DIR_GATE_TIMEOUT_S") or "3.0")
+GATE_BUSY = "rate-limited: directory check busy, try again"
+
+
+class DirGate:
+    def __init__(self, cmd, timeout):
+        self.cmd = cmd
+        self.timeout = timeout
+        self.proc = None
+        self.buf = b""
+
+    def _stop(self):
+        if self.proc is not None:
+            try:
+                self.proc.kill()
+                self.proc.wait(timeout=1)
+            except Exception:
+                pass
+        self.proc = None
+        self.buf = b""
+
+    def ask(self, eid, msg):
+        try:
+            if self.proc is None or self.proc.poll() is not None:
+                self._stop()
+                self.proc = subprocess.Popen(self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            line = json.dumps({"id": eid, "event": msg.get("event", {}),
+                               "sourceType": msg.get("sourceType"), "sourceInfo": msg.get("sourceInfo")})
+            self.proc.stdin.write(line.encode() + b"\n")
+            self.proc.stdin.flush()
+            fd = self.proc.stdout.fileno()
+            deadline = time.monotonic() + self.timeout
+            while True:
+                while b"\n" in self.buf:
+                    raw, self.buf = self.buf.split(b"\n", 1)
+                    try:
+                        ans = json.loads(raw)
+                    except Exception:
+                        continue
+                    if not isinstance(ans, dict) or ans.get("id") != eid:
+                        continue
+                    if ans.get("action") == "accept":
+                        return {"id": eid, "action": "accept"}
+                    reason = ans.get("msg")
+                    if ans.get("action") == "reject" and isinstance(reason, str) and reason:
+                        return {"id": eid, "action": "reject", "msg": reason[:200]}
+                    raise ValueError("garbled answer")
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError()
+                ready, _, _ = select.select([fd], [], [], left)
+                if not ready:
+                    raise TimeoutError()
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    raise EOFError()
+                self.buf += chunk
+        except Exception:
+            # A late answer must never be read as the next event's, so the sidecar goes.
+            self._stop()
+            return {"id": eid, "action": "reject", "msg": GATE_BUSY}
+
+
 def main():
+    gate = DirGate(GATE_CMD, GATE_TIMEOUT_S)
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -127,7 +207,10 @@ def main():
             continue
         if msg.get("type") not in ("new", "lookback"):
             continue
-        out = decide(msg.get("event", {}))
+        event = msg.get("event", {})
+        out = decide(event)
+        if out["action"] == "accept" and event.get("kind") == DIR_KIND:
+            out = gate.ask(out["id"], msg)
         sys.stdout.write(json.dumps(out) + "\n")
         sys.stdout.flush()
 
