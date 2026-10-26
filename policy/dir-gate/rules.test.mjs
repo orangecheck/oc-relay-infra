@@ -315,6 +315,71 @@ describe('a device record', () => {
         assert.match((await write(forged)).msg, /^invalid: a device record needs a BIP-322 signature/);
     });
 
+    it('a revocation signed for one address is refused under another address\'s slot', async () => {
+        const other = 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh';
+        const { nostrSk, nostrPk } = nostr(6);
+        const crossed = signNostrEvent(
+            {
+                pubkey: nostrPk,
+                kind: 30078,
+                created_at: 1_790_000_100,
+                content: buildRevocationStatement({ address: other, device_id: 'dev6', revoked_at: '2026-10-02T00:00:00Z' }),
+                tags: [
+                    ['d', `oc-lock:device:${ADDR}`],
+                    ['binding_sig', `sig:${other}`],
+                ],
+            },
+            nostrSk
+        );
+        assert.match((await write(crossed)).msg, /^invalid: a device record needs a BIP-322 signature/);
+    });
+
+    /** OC Lock's unsigned advice, as oc-lock-web's DeviceManager builds it when no wallet signs. */
+    const advice = (n, statement = buildRevocationStatement({ address: ADDR, device_id: `dev${n}`, revoked_at: '2026-10-03T00:00:00Z' })) =>
+        finalizeDeviceEvent({
+            deviceSk: sk(n),
+            address: ADDR,
+            device_id: `dev${n}`,
+            device_pk: 'revoked',
+            bindingStatement: statement,
+            bindingSigBase64: '',
+            createdAtUnix: 1_790_000_200,
+        });
+
+    it('a key that holds a record in the slot may retract it with an unsigned revocation', async () => {
+        const { w, deps } = world({ devices: [device(1)] });
+        assert.deepEqual(await createGate(deps).check(msg(advice(1))), { action: 'accept' });
+        // A key with no record there cannot.
+        assert.match((await createGate(deps).check(msg(advice(7)))).msg, /^invalid: a device record needs a BIP-322 signature/);
+        // Its own read without an answer is busy, never an admission.
+        w.ownFails = true;
+        assert.match((await createGate(deps).check(msg(advice(1)))).msg, /^rate-limited: /);
+    });
+
+    it('anything else unsigned from a key in the slot, a re-bind included, goes through the BIP-322 path', async () => {
+        const { deps } = world({ devices: [device(1)] });
+        const rebind = buildBindingStatement({
+            address: ADDR,
+            device_pk: 'bb'.repeat(32),
+            device_id: 'dev1',
+            created_at: '2026-10-03T00:00:00Z',
+            nostr_pk: nostr(1).nostrPk,
+        });
+        const unsignedRebind = finalizeDeviceEvent({
+            deviceSk: sk(1),
+            address: ADDR,
+            device_id: 'dev1',
+            device_pk: 'bb'.repeat(32),
+            bindingStatement: rebind,
+            bindingSigBase64: '',
+            createdAtUnix: 1_790_000_200,
+        });
+        assert.match((await createGate(deps).check(msg(unsignedRebind))).msg, /^invalid: a device record needs a BIP-322 signature/);
+        // An unsigned revocation for another address, filed here, is not this slot's.
+        const elsewhere = advice(1, buildRevocationStatement({ address: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh', device_id: 'dev1', revoked_at: '2026-10-03T00:00:00Z' }));
+        assert.match((await createGate(deps).check(msg(elsewhere))).msg, /^invalid: a device record needs a BIP-322 signature/);
+    });
+
     it('costs no chain or relay read, and is limited per source apart from listings', async () => {
         const { w, deps } = world();
         const gate = createGate(deps);

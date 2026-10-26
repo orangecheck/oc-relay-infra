@@ -107,6 +107,7 @@ flyctl logs                                       # tail
 - **Backups:** nightly `strfry export` to a Hetzner storage box, retained 30 days. Quarterly restore drill.
 - **Monitoring:** analytics.ochk.io reads `/health` on its snapshot cron and alerts when the relay does not answer (`relay.down`) and when a request came without a usable `Fly-Client-IP` in the last hour (`relay.source_unknown`). Fly's own check reads `/health` every 30 s.
 - **Negentropy sync:** quarterly cron, runs `sync/backfill.sh`, ensures relay holds the family's public-relay history.
+- **Directory gate:** a Node sidecar (`policy/dir-gate/`) checks every kind-30114 write and every `oc-lock:device:` record. While it is down or slow, those writes answer `rate-limited: …` and nothing else changes; clients publish to public relays too. It has no health route (fly.toml checks TCP 7777); its answers are counted by reason per day in `dir-gate-counts.json`.
 
 ## License
 

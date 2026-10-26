@@ -4,7 +4,8 @@
 // holds. Cheapest checks first. A read that does not answer, or a spent budget,
 // refuses with "rate-limited:", never admits. The rule itself is lock-core's.
 // A kind-30078 device record (oc-lock:device:<address>) is admitted only with a
-// BIP-322 signature by that address, so no one else can fill an address's slot.
+// BIP-322 signature by that address, so no one else can fill an address's slot,
+// or as a revocation by a key that already holds a record there.
 
 import {
     channelDirectoryDtag,
@@ -15,7 +16,7 @@ import {
     repointId,
     resolveDirectory,
 } from '@orangecheck/lock-core/directory';
-import { boundNostrKeys, verifyDeviceRecords } from '@orangecheck/lock-device';
+import { BINDING_VERSION, boundNostrKeys, verifyDeviceRecords, verifyNostrEvent } from '@orangecheck/lock-device';
 
 export const LIMITS = {
     /** 30114 writes per source IP per minute. */
@@ -250,10 +251,15 @@ export function createGate(deps, limits = LIMITS) {
         }
         const address = d.slice(DEVICE_PREFIX.length);
         const verified = await verifyDeviceRecords([ev], address, { verifyBip322: deps.verifyBip322 });
-        if (verified.length !== 1) {
-            return reject('invalid: a device record needs a BIP-322 signature by the address its d tag names (OC Lock §3)');
+        if (verified.length === 1) return { action: 'accept' };
+        // A key that already holds a record in the slot may replace it with a revocation of its
+        // own, signed or not (OC Lock's unsigned advice). That replaces its record; it adds none.
+        if (verifyNostrEvent(ev) && isRevocationFor(ev.content, address)) {
+            const own = await deps.deviceEventsBy(address, ev.pubkey);
+            if (own === 'no-answer') return busy('a relay read did not answer');
+            if (own.some((e) => e?.pubkey === ev.pubkey)) return { action: 'accept' };
         }
-        return { action: 'accept' };
+        return reject('invalid: a device record needs a BIP-322 signature by the address its d tag names (OC Lock §3)');
     }
 
     async function decide(msg) {
@@ -308,6 +314,12 @@ export function createGate(deps, limits = LIMITS) {
             }
         },
     };
+}
+
+/** A revocation statement (OC Lock §3.5) naming `address`. */
+function isRevocationFor(content, address) {
+    const lines = typeof content === 'string' ? content.split('\n') : [];
+    return lines[0] === `oc-lock:device-revoke:${BINDING_VERSION}` && lines.includes(`address: ${address}`);
 }
 
 /** A stored 30114 event as the namespace it sits in, its d tag and its parsed record. */
