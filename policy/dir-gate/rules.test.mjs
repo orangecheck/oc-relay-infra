@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { channelDirectoryDtag, channelId, claimId, directoryDtag } from '@orangecheck/lock-core/directory';
+import { channelClaimId, channelDirectoryDtag, channelId, claimId, directoryDtag } from '@orangecheck/lock-core/directory';
 import {
     buildBindingStatement,
     buildRevocationStatement,
@@ -71,8 +71,8 @@ const header = (rootHex) => {
 };
 
 /** One claim per block here: the bare proof makes the claim id the block's Merkle root. */
-function claimFor(handle, { outpoint = `${'ab'.repeat(32)}:0`, nonce = sha('nonce ' + handle), address = ADDR, height = ANCHOR } = {}) {
-    const id = claimId({ handle, address, outpoint, nonce });
+function claimFor(handle, { outpoint = `${'ab'.repeat(32)}:0`, nonce = sha('nonce ' + handle), address = ADDR, height = ANCHOR, idOf = claimId } = {}) {
+    const id = idOf({ handle, address, outpoint, nonce });
     return { id, height, claim: { outpoint, nonce, ots: proof(id, height) } };
 }
 
@@ -165,6 +165,26 @@ describe('a listing', () => {
         assert.equal(w.reads.device, 0);
     });
 
+    it('is refused unanchored when its proof carries more than 8 Bitcoin attestations, with no header read', async () => {
+        const { w, deps } = world();
+        const c = claimFor('alice');
+        const idBytes = Buffer.from(c.id, 'hex');
+        const ops = Array.from({ length: 9 }, (_, i) => {
+            const salt = createHash('sha256').update('cap ' + i).digest().subarray(0, 16);
+            const appended = Buffer.concat([idBytes, salt]);
+            const root = createHash('sha256').update(appended).digest();
+            w.roots.set(ANCHOR - i, root.toString('hex'));
+            return {
+                op: { kind: 'append', arg: new Uint8Array(salt) },
+                child: { msg: new Uint8Array(appended), attestations: [], ops: [{ op: { kind: 'sha256' }, child: { msg: new Uint8Array(root), attestations: [{ kind: 'bitcoin', height: ANCHOR - i }], ops: [] } }] },
+            };
+        });
+        c.claim.ots = base64Encode(serializeTimestamp({ msg: new Uint8Array(idBytes), attestations: [], ops }));
+        w.coins.set(c.claim.outpoint, { confirmedAt: ANCHOR - 300, value: 546, paysTo: ADDR, spendHeight: null });
+        assert.match((await createGate(deps).check(msg(listingEvent('alice', { claim: c })))).msg, /^invalid: the claim is not anchored/);
+        assert.equal(w.reads.header, 0);
+    });
+
     it('is refused when its key is not bound, or is bound by a revoked record', async () => {
         const { w, deps } = world({ devices: [device(2)] });
         chainFor(w, claimFor('alice'));
@@ -182,7 +202,8 @@ describe('a listing', () => {
     it('a channel listing goes through the same gate under its founder fields', async () => {
         const { w, deps } = world();
         const { nostrSk, nostrPk } = nostr(1);
-        const c = claimFor('builders');
+        // A channel's claim names its namespace (OC Chat §8.3.6).
+        const c = claimFor('builders', { idOf: channelClaimId });
         chainFor(w, c);
         const content = (cid) => ({
             v: 2,
