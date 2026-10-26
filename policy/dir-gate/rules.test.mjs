@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { channelClaimId, channelDirectoryDtag, channelId, claimId, directoryDtag } from '@orangecheck/lock-core/directory';
+import { channelClaimId, channelDirectoryDtag, channelId, claimId, directoryDtag, repointId } from '@orangecheck/lock-core/directory';
 import {
     BINDING_VERSION,
     buildBindingStatement,
@@ -164,6 +164,52 @@ describe('a listing', () => {
         assert.match((await gate.check(msg(listingEvent('alice', { claim: near })))).msg, /6 confirmations/);
         assert.equal(w.reads.header - before, 2);
         assert.equal(w.reads.device, 0);
+    });
+
+    /** A bare proof committing to `idHex` with one Bitcoin attestation per height. */
+    const proofAt = (idHex, heights) =>
+        base64Encode(
+            serializeTimestamp({ msg: Buffer.from(idHex, 'hex'), attestations: heights.map((height) => ({ kind: 'bitcoin', height })), ops: [] })
+        );
+
+    it("is refused when its proof also carries attestations its blocks do not confirm, below its anchor or above it", async () => {
+        for (const fakes of [[ANCHOR - 900, ANCHOR - 800, ANCHOR - 700, ANCHOR - 600, ANCHOR - 500, ANCHOR - 400, ANCHOR - 300], [ANCHOR + 2]]) {
+            const { w, deps } = world();
+            const c = claimFor('alice');
+            chainFor(w, c);
+            for (const h of fakes) w.roots.set(h, sha('another block ' + h));
+            c.claim.ots = proofAt(c.id, [...fakes, ANCHOR]);
+            assert.match(
+                (await createGate(deps).check(msg(listingEvent('alice', { claim: c })))).msg,
+                /^invalid: the claim's proof carries an attestation its block does not confirm/,
+                String(fakes)
+            );
+        }
+    });
+
+    it('is admitted when every attestation its proof carries is confirmed, each header read once', async () => {
+        const { w, deps } = world();
+        const c = claimFor('alice');
+        chainFor(w, c);
+        w.roots.set(ANCHOR + 1, c.id);
+        c.claim.ots = proofAt(c.id, [ANCHOR, ANCHOR + 1]);
+        assert.deepEqual(await createGate(deps).check(msg(listingEvent('alice', { claim: c }))), { action: 'accept' });
+        assert.equal(w.reads.header, 2);
+    });
+
+    it("is refused when a re-point's proof carries an attestation its block does not confirm", async () => {
+        const { w, deps } = world();
+        const c = claimFor('alice');
+        chainFor(w, c);
+        const r = { prev: c.claim.outpoint, outpoint: `${'cd'.repeat(32)}:1`, nonce: sha('re-point nonce') };
+        const rid = repointId({ claim: c.id, ...r });
+        w.roots.set(ANCHOR + 1, rid);
+        w.roots.set(ANCHOR - 50, sha('another block'));
+        c.claim.repoints = [{ ...r, ots: proofAt(rid, [ANCHOR - 50, ANCHOR + 1]) }];
+        assert.match(
+            (await createGate(deps).check(msg(listingEvent('alice', { claim: c })))).msg,
+            /^invalid: a re-point's proof carries an attestation its block does not confirm/
+        );
     });
 
     it('is refused unanchored when its proof carries more than 8 Bitcoin attestations, with no header read', async () => {

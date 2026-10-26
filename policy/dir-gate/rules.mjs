@@ -17,6 +17,7 @@ import {
     resolveDirectory,
 } from '@orangecheck/lock-core/directory';
 import { BINDING_VERSION, boundNostrKeys, verifyDeviceRecords, verifyNostrEvent } from '@orangecheck/lock-device';
+import { base64Decode, bitcoinAnchors, hexDecode, parseProof } from '@orangecheck/stamp-ots';
 
 export const LIMITS = {
     /** 30114 writes per source IP per minute. */
@@ -48,6 +49,31 @@ const busy = (why) => reject(`rate-limited: ${why}, try again`);
 const dTag = (ev) => (Array.isArray(ev?.tags) ? ev.tags.find((t) => Array.isArray(t) && t[0] === 'd')?.[1] : undefined);
 
 class NoAnswer extends Error {}
+
+const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/**
+ * A proof's anchor as directoryAnchor reads it, or 'padded' when the proof also carries a Bitcoin
+ * attestation its block's header does not confirm. Clients order their header reads by the lowest
+ * attestation a proof claims, so one naming another block's root would let junk be read first.
+ */
+async function anchorOf(proofB64, idHex, headers) {
+    // Each height is read once, by lock-core's walk and by the check after it alike.
+    const read = new Map();
+    const once = { getHeaderAt: (height) => (read.has(height) ? read : read.set(height, headers.getHeaderAt(height))).get(height) };
+    const anchor = await directoryAnchor(proofB64, idHex, once);
+    if (typeof anchor !== 'number') return anchor;
+    for (const a of bitcoinAnchors(parseProof(base64Decode(proofB64), hexDecode(idHex)))) {
+        let h;
+        try {
+            h = await once.getHeaderAt(a.blockHeight);
+        } catch {
+            throw new NoAnswer();
+        }
+        if (!(h instanceof Uint8Array) || h.byteLength !== 80 || !sameBytes(h.subarray(36, 68), a.merkleRoot)) return 'padded';
+    }
+    return anchor;
+}
 
 function remember(map, key, value) {
     if (map.size >= CACHE_MAX) map.delete(map.keys().next().value);
@@ -187,14 +213,17 @@ export function createGate(deps, limits = LIMITS) {
     async function listing(ev, rec, d, ns, source) {
         const height = await tip(source);
         const headers = headersFor(source);
-        const anchor = await directoryAnchor(rec.claim.ots, rec.claimId, headers);
+        const anchor = await anchorOf(rec.claim.ots, rec.claimId, headers);
+        if (anchor === 'padded') return reject('invalid: the claim\'s proof carries an attestation its block does not confirm (OC Chat §8.2.1)');
         if (anchor === null) return reject('invalid: the claim is not anchored (OC Chat §8.2.1)');
         if (typeof anchor !== 'number') throw new NoAnswer();
         if (height - anchor + 1 < DEEP) return reject('invalid: the claim needs 6 confirmations on its anchor (OC Chat §8.2.1)');
         const repoints = [];
         for (const r of rec.claim.repoints) {
             const id = repointId({ claim: rec.claimId, prev: r.prev, outpoint: r.outpoint, nonce: r.nonce });
-            repoints.push({ repointId: id, prev: r.prev, outpoint: r.outpoint, anchor: await directoryAnchor(r.ots, id, headers) });
+            const at = await anchorOf(r.ots, id, headers);
+            if (at === 'padded') return reject('invalid: a re-point\'s proof carries an attestation its block does not confirm (OC Chat §8.2.1)');
+            repoints.push({ repointId: id, prev: r.prev, outpoint: r.outpoint, anchor: at });
         }
         let keys = null;
         const reader = {
