@@ -11,7 +11,13 @@ A single-region [strfry](https://github.com/hoytech/strfry) instance, configured
 1. Accept the family's Nostr kinds (30078, 30080–30087, 30110–30112, 30114 — 13 of them) and reject everything else.
 2. Additionally reject events that don't carry a canonical OC `d`-tag prefix (`oc-pledge:`, `oc-stamp:`, `oc-agent-del:`, etc. — plus a bare 64-hex `attestation_id`, which is what OC Attest's spec prescribes) — the curation that turns a generic relay into a *family* relay. The authoritative table is `policy/oc-dtag-filter.py`; `ABUSE.md` republishes it and `policy/test_policy.py` asserts the two agree.
 3. Sync historical events from `relay.damus.io`, `nos.lol`, `relay.primal.net`, and `nostr.oxtr.dev` via [negentropy](https://github.com/hoytech/strfry/blob/master/docs/negentropy.md).
-4. Serve a small `/health` endpoint with `{event_count, last_event_at, lmdb_size_bytes, kind_distribution}` for monitoring + the family-vitals widget on `ochk.io`.
+4. Answer `/health` from `oc-relay-front`: strfry's NIP-11 name, version and supported NIPs, read over loopback, plus `source_unknown`, the count of requests that came without a usable `Fly-Client-IP`. Fly's health check and analytics.ochk.io read it.
+
+## Visitor addresses
+
+strfry stores a source with every event and logs it on Connect. It never sees a visitor's address. `oc-relay-front` (`front/`) listens where Fly forwards and hands strfry, on loopback, an `x-oc-source` header holding a pseudonym for the UTC day: `fd` and the first 15 bytes of HMAC-SHA256 over the address (an IPv6 address by its /64) under a 32-byte salt that lives only in the front's memory and is replaced on the first request of each day. Within a day one visitor's connections share a pseudonym; across days nobody can link them, us included. A request without a usable `Fly-Client-IP` gets `fd00::`, one shared bucket, and is counted in `/health`. No header naming the visitor reaches strfry.
+
+Fly's edge still sees each visitor's address, as Vercel does for the family's sites. At the front's first start on a volume, `boot/oc-relay-boot.sh` rewrote the store through `strfry export` and `import` into a new file, so no address stored before the front remains in it; Fly's volume snapshots held the old file until they aged out.
 
 That's it. No NIP-42 auth on writes. No paid tiers. No content moderation beyond kind + d-tag shape.
 
@@ -43,23 +49,22 @@ oc-relay-infra/
 ├── ABUSE.md              what we accept, what we reject, takedown policy, transparency log
 ├── LICENSE               MIT
 ├── strfry.conf           the production relay config (kind allowlist, retention, no-auth)
-├── Dockerfile            pinned strfry image + python3 for the policy plugin
+├── Dockerfile            builds the front, then pinned strfry image + python3 for the policy plugin
 ├── fly.toml              Fly.io deploy config (single region fra, 50 GB volume)
 ├── policy/
 │   ├── oc-dtag-filter.py strfry write-policy plugin (Python) — kind + d-tag gate
 │   └── test_policy.py     asserts the gate accepts what shipped clients emit
 ├── sync/
 │   └── backfill.sh       negentropy sync from public relays, cold-start + quarterly
-└── monitoring/
-    └── health.ts         /health JSON probe — NOT DEPLOYED. The Dockerfile
-                          never copies it and fly.toml health-checks TCP 7777
-                          directly, so nothing serves this. Kept for when a
-                          status surface wants it.
+├── front/
+│   └── main.go           oc-relay-front: the daily pseudonym, /health, runs strfry
+└── boot/
+    └── oc-relay-boot.sh  rewrites the store once per volume, then starts the front
 ```
 
 ## Deployment
 
-Hosted on **Fly.io**, single region `fra` (Frankfurt). Fly handles TLS termination at the edge and proxies wss://relay.ochk.io → strfry:7777 over the private network. Persistent storage is a 50 GiB Fly Volume mounted at `/data/strfry/db`.
+Hosted on **Fly.io**, single region `fra` (Frankfurt). Fly handles TLS termination at the edge and proxies wss://relay.ochk.io → oc-relay-front on :7777, which forwards to strfry on 127.0.0.1:7778. Persistent storage is a 50 GiB Fly Volume mounted at `/data/strfry/db`.
 
 ```bash
 flyctl deploy                                     # build + ship
@@ -97,7 +102,7 @@ flyctl logs                                       # tail
 
 - **Status:** `https://status.ochk.io/relay` (existing status module, new probe row)
 - **Backups:** nightly `strfry export` to a Hetzner storage box, retained 30 days. Quarterly restore drill.
-- **Monitoring:** UptimeRobot pings `/health` every 5 min. Alert on miss + on `event_count` plateau (suggests a write-path break).
+- **Monitoring:** analytics.ochk.io reads `/health` on its snapshot cron and alerts when the relay does not answer (`relay.down`) and when a request came without a usable `Fly-Client-IP` in the last hour (`relay.source_unknown`). Fly's own check reads `/health` every 30 s.
 - **Negentropy sync:** quarterly cron, runs `sync/backfill.sh`, ensures relay holds the family's public-relay history.
 
 ## License

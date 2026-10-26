@@ -7,8 +7,9 @@ name: CI
 #   1. Validate strfry.conf parses (smoke parse via grep — strfry is
 #      a C++ binary not on the runner; full parse only happens on Fly).
 #   2. Run the write-policy plugin against the d-tags the shipped
-#      clients emit, and type-check the (undeployed) Deno health probe.
-#   3. Validate Dockerfile syntax via `docker buildx build --check`.
+#      clients emit, and oc-relay-front's tests.
+#   3. Build the image and start it: the boot script rewrites an empty
+#      store once, and /health answers through the front.
 #
 # This catches misconfiguration before deploy.
 
@@ -48,9 +49,12 @@ jobs:
                   # Assert the plugin is wired and points at the live file.
                   grep -q 'writePolicy' strfry.conf
                   grep -q 'oc-dtag-filter.py' strfry.conf
-                  # strfry stores the connection's address with each event,
-                  # so it must not read a visitor address from any header.
-                  if grep -qE '^[^#]*realIpHeader' strfry.conf; then echo 'realIpHeader must stay unset'; exit 1; fi
+                  # strfry stores its source with each event. It must read the
+                  # front's pseudonym and nothing else, and only the front may
+                  # reach it.
+                  test "$(grep -cE '^[^#]*realIpHeader' strfry.conf)" = 1
+                  grep -qE '^[[:space:]]*realIpHeader = "x-oc-source"$' strfry.conf
+                  grep -qE '^[[:space:]]*bind = "127\.0\.0\.1"$' strfry.conf
                   echo "strfry.conf shape ok"
 
             - name: write-policy plugin compiles
@@ -84,21 +88,27 @@ jobs:
                   test -f policy/oc-dtag-filter.py
                   test -f policy/test_policy.py
                   test -f sync/backfill.sh
-                  test -f monitoring/health.ts
+                  test -f front/main.go
+                  test -f boot/oc-relay-boot.sh
                   echo "all required files present"
 
-    deno-health-probe:
-        name: Deno health probe
+    front:
+        name: oc-relay-front tests
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v5
 
-            - uses: denoland/setup-deno@v2
+            - uses: actions/setup-go@v5
               with:
-                  deno-version: 'v1.46.3'
+                  go-version: '1.27.2'
+                  cache: false
 
-            - name: Type check health.ts
-              run: deno check monitoring/health.ts
+            - name: vet and test
+              working-directory: front
+              run: |
+                  test -z "$(gofmt -l .)"
+                  go vet ./...
+                  go test -race -count=1 ./...
 
     docker:
         name: Docker build (no push)
@@ -115,3 +125,14 @@ jobs:
                   push: false
                   load: true
                   tags: oc-relay-infra:ci
+
+            - name: The image starts, rewrites an empty store once, and answers through the front
+              run: |
+                  mkdir -p "$RUNNER_TEMP/db"
+                  docker run -d --name relay -v "$RUNNER_TEMP/db:/data/strfry/db" -p 127.0.0.1:17777:7777 oc-relay-infra:ci
+                  for i in $(seq 1 30); do curl -sf http://127.0.0.1:17777/health > /dev/null && break; sleep 1; done
+                  curl -sf http://127.0.0.1:17777/health | grep -q '"ok":true'
+                  curl -sf -H 'Accept: application/nostr+json' http://127.0.0.1:17777/ | grep -q '"name":"relay.ochk.io"'
+                  docker logs relay 2>&1 | grep -q 'oc-relay-boot: rewrote the store: 0 events'
+                  test -e "$RUNNER_TEMP/db/.sources-cleared-1"
+                  docker logs relay 2>&1 | tail -20
