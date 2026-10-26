@@ -3,6 +3,8 @@
 // is signed by a key bound to its address and its `ends` names a claim this relay
 // holds. Cheapest checks first. A read that does not answer, or a spent budget,
 // refuses with "rate-limited:", never admits. The rule itself is lock-core's.
+// A kind-30078 device record (oc-lock:device:<address>) is admitted only with a
+// BIP-322 signature by that address, so no one else can fill an address's slot.
 
 import {
     channelDirectoryDtag,
@@ -27,6 +29,8 @@ export const LIMITS = {
     /** Answer within this, or refuse: strfry waits on every check. */
     deadlineMs: 2500,
 };
+
+const DEVICE_PREFIX = 'oc-lock:device:';
 
 const NAMESPACES = [
     { prefix: 'oc-lock-chat-dir:', dtag: directoryDtag, parse: parseDirectoryContent },
@@ -128,24 +132,28 @@ export function createGate(deps, limits = LIMITS) {
         return facts;
     };
 
-    // The keys bound to `address`, read here and from public relays at once. The signer's own
-    // records are read apart, so records others pile into the address's slot cannot hide them.
-    // Its key found bound is an answer even when the full read failed; not found is one only
-    // when every read answered.
+    // The keys bound to `address`. The signer's own records are read apart, so records others
+    // pile into the slot cannot hide them; a revocation may be signed by any key, so it is read
+    // from the full slot. Bound counts only once the full slot on this relay answered. Public
+    // relays are read only when this relay does not bind the signer: a revocation held only
+    // there is not seen while this relay binds it.
     const boundKeys = async (address, signer) => {
-        const [all, own, pub] = await Promise.all([
-            deps.deviceEvents(address),
-            deps.deviceEventsBy(address, signer),
-            deps.publicDeviceEvents(address).catch(() => ({ events: [], allAnswered: false })),
-        ]);
-        const byId = new Map();
-        for (const e of [...(all === 'no-answer' ? [] : all), ...(own === 'no-answer' ? [] : own), ...pub.events]) {
-            if (e && typeof e.id === 'string') byId.set(e.id, e);
-        }
-        const verified = await verifyDeviceRecords([...byId.values()], address, { verifyBip322: deps.verifyBip322 });
-        const keys = boundNostrKeys(verified, { now: new Date(deps.now()) });
+        const pubRead = deps.publicDeviceEvents(address).catch(() => ({ events: [], allAnswered: false }));
+        const [all, own] = await Promise.all([deps.deviceEvents(address), deps.deviceEventsBy(address, signer)]);
+        if (all === 'no-answer') return 'no-answer';
+        const verifyFrom = async (events) => {
+            const byId = new Map();
+            for (const e of events) if (e && typeof e.id === 'string') byId.set(e.id, e);
+            const verified = await verifyDeviceRecords([...byId.values()], address, { verifyBip322: deps.verifyBip322 });
+            return boundNostrKeys(verified, { now: new Date(deps.now()) });
+        };
+        const local = [...all, ...(own === 'no-answer' ? [] : own)];
+        const keys = await verifyFrom(local);
         if (keys.includes(signer)) return keys;
-        return all === 'no-answer' || own === 'no-answer' || !pub.allAnswered ? 'no-answer' : keys;
+        const pub = await pubRead;
+        const wider = await verifyFrom([...local, ...pub.events]);
+        if (wider.includes(signer)) return wider;
+        return own === 'no-answer' || !pub.allAnswered ? 'no-answer' : wider;
     };
 
     // One live claim per current coin per namespace (§8.2.6): coin -> the claim it backs.
@@ -235,10 +243,27 @@ export function createGate(deps, limits = LIMITS) {
         return { action: 'accept' };
     }
 
+    // A device record counts only with a BIP-322 signature by the address its slot names (OC Lock §3).
+    async function deviceRecord(ev, d, source, ip) {
+        if (!take(`dev:${source}`, ip ? limits.perIp : limits.perSource)) {
+            return reject('rate-limited: too many device records from here, try again in a minute');
+        }
+        const address = d.slice(DEVICE_PREFIX.length);
+        const verified = await verifyDeviceRecords([ev], address, { verifyBip322: deps.verifyBip322 });
+        if (verified.length !== 1) {
+            return reject('invalid: a device record needs a BIP-322 signature by the address its d tag names (OC Lock §3)');
+        }
+        return { action: 'accept' };
+    }
+
     async function decide(msg) {
         const ev = msg?.event;
         // Without the network: the record's shape, its d tag, its signer.
         const d = dTag(ev);
+        if (ev?.kind === 30078 && typeof d === 'string' && d.startsWith(DEVICE_PREFIX)) {
+            const ip = msg.sourceType === 'IP4' || msg.sourceType === 'IP6';
+            return deviceRecord(ev, d, ip ? `ip:${msg.sourceInfo}` : `src:${msg.sourceType}:${msg.sourceInfo ?? ''}`, ip);
+        }
         const ns = typeof d === 'string' ? NAMESPACES.find((n) => d.startsWith(n.prefix)) : undefined;
         if (!ns || ev.kind !== 30114) return reject('invalid: not an OC Chat directory record');
         let content;
@@ -248,7 +273,7 @@ export function createGate(deps, limits = LIMITS) {
             return reject('invalid: content is not JSON');
         }
         if (content && typeof content === 'object' && content.v === 1) {
-            return reject('blocked: a v1 listing holds no handle; publish v2 (OC Chat 0.4 §8.2.1)');
+            return reject('blocked: v1 directory records are not accepted here; publish v2 (OC Chat 0.4 §8.2.1)');
         }
         const handle = typeof content?.handle === 'string' ? content.handle : '';
         const rec = ns.parse(content, handle);

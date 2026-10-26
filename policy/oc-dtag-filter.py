@@ -125,9 +125,20 @@ def decide(event):
 # gate is also checked against the claim rule by a Node sidecar that runs the
 # rule's one implementation (@orangecheck/lock-core/directory). strfry waits for
 # each answer before the next event, so the sidecar gets GATE_TIMEOUT_S; a late,
-# dead or garbled sidecar is a refusal, never an admission. Other kinds never
-# reach it.
+# dead or garbled sidecar is a refusal, never an admission. A kind-30078 OC Lock
+# device record goes to it too, to check its BIP-322 signature. Nothing else
+# reaches it.
 DIR_KIND = 30114
+DEVICE_KIND = 30078
+DEVICE_PREFIX = "oc-lock:device:"
+
+
+def gated(event):
+    if event.get("kind") == DIR_KIND:
+        return True
+    d = d_tag_of(event)
+    return event.get("kind") == DEVICE_KIND and isinstance(d, str) and d.startswith(DEVICE_PREFIX)
+
 GATE_CMD = json.loads(os.environ.get("OC_DIR_GATE_CMD") or "null") or [
     "/opt/node/lib/ld-musl-x86_64.so.1", "--library-path", "/opt/node/lib",
     "/opt/node/bin/node", "/data/strfry/policy/dir-gate/gate.mjs",
@@ -237,7 +248,7 @@ def main():
             continue
         event = msg.get("event", {})
         out = decide(event)
-        if out["action"] == "accept" and event.get("kind") == DIR_KIND:
+        if out["action"] == "accept" and gated(event):
             out = gate.ask(out["id"], msg)
         sys.stdout.write(json.dumps(out) + "\n")
         sys.stdout.flush()

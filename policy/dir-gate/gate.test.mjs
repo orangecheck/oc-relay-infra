@@ -37,8 +37,8 @@ describe('gate.mjs', () => {
             [['e1', 'reject'], ['e2', 'reject'], ['e3', 'reject']]
         );
         const v1Reason = answers[0].msg;
-        assert.match(v1Reason, /^blocked: a v1 listing holds no handle/);
-        assert.match(out.stderr, /dir-gate: blocked: a v1 listing holds no handle; publish v2 \(OC Chat 0\.4 §8\.2\.1\) \(2 today\)/);
+        assert.match(v1Reason, /^blocked: v1 directory records are not accepted here/);
+        assert.match(out.stderr, /dir-gate: blocked: v1 directory records are not accepted here; publish v2 \(OC Chat 0\.4 §8\.2\.1\) \(2 today\)/);
         const days = JSON.parse(readFileSync(counts, 'utf8'));
         assert.deepEqual(Object.values(days)[0], { [v1Reason]: 2, 'invalid: content is not JSON': 1 });
     });

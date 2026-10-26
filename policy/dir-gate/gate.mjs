@@ -1,4 +1,4 @@
-// The kind-30114 sidecar of oc-dtag-filter.py: one JSON line in per event
+// The kind-30114 and oc-lock:device sidecar of oc-dtag-filter.py: one JSON line in per event
 // ({id, event, sourceType, sourceInfo}), one line out ({id, action, msg?}).
 // Chain facts come from an Esplora API (mempool.space unless OC_DIR_GATE_ESPLORA
 // says otherwise); device records and stored listings from this relay itself.
@@ -55,7 +55,8 @@ async function query(filter, { pages = 1, relay = RELAY } = {}) {
                 } catch {
                     return;
                 }
-                if (frame[0] === 'EVENT' && frame[1] === 'g') out.push(frame[2]);
+                // A relay that ignores the limit sends no more than it would count as one page.
+                if (frame[0] === 'EVENT' && frame[1] === 'g' && out.length < filter.limit) out.push(frame[2]);
                 else if (frame[0] === 'EOSE' && frame[1] === 'g') done(out);
                 else if (frame[0] === 'CLOSED' && frame[1] === 'g') done('no-answer');
             };

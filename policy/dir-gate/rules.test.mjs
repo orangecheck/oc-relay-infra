@@ -143,7 +143,7 @@ describe('a listing', () => {
         const { w, deps } = world();
         const gate = createGate(deps);
         const v1 = listingEvent('alice', { extra: { v: 1 } });
-        assert.match((await gate.check(msg(v1))).msg, /^blocked: a v1 listing/);
+        assert.match((await gate.check(msg(v1))).msg, /^blocked: v1 directory records are not accepted here/);
         assert.match((await gate.check(msg(listingEvent('alice', { d: directoryDtag('bob') })))).msg, /^invalid: the d tag/);
         assert.match((await gate.check(msg(listingEvent('alice', { extra: { inbox_pubkey: nostr(2).nostrPk } })))).msg, /^invalid: a listing is signed by its inbox key/);
         assert.match((await gate.check(msg(listingEvent('alice', { extra: { claim: { outpoint: 'x' } } })))).msg, /^invalid: not a v2/);
@@ -257,11 +257,14 @@ describe('a read without an answer refuses, never admits', () => {
 });
 
 describe('where bindings are read', () => {
-    it("records piled into the address's slot cannot hide the signer's own", async () => {
-        const { w, deps } = world();
+    it('a slot this relay did not read in full refuses, though the signer binds itself: a revocation may sit there', async () => {
+        const { w, deps } = world({ devices: [device(1), revocation(1)] });
         chainFor(w, claimFor('alice'));
-        w.deviceFails = true; // the full read of the slot gives up
-        assert.deepEqual(await createGate(deps).check(msg(listingEvent('alice'))), { action: 'accept' });
+        w.deviceFails = true; // the full read of the slot gives up; the signer's own read still binds it
+        const out = await createGate(deps).check(msg(listingEvent('alice')));
+        assert.match(out.msg, /^rate-limited: /);
+        const tomb = await createGate(deps).check(msg(tombstoneEvent('alice', claimFor('alice').id)));
+        assert.match(tomb.msg, /^rate-limited: /);
     });
 
     it('a device record published only to public relays binds too', async () => {
@@ -271,11 +274,55 @@ describe('where bindings are read', () => {
         assert.deepEqual(await createGate(deps).check(msg(listingEvent('alice'))), { action: 'accept' });
     });
 
-    it('a revocation read anywhere retires the key', async () => {
+    it('a revocation read on a public relay retires a key this relay does not bind', async () => {
+        const { w, deps } = world({ devices: [] });
+        chainFor(w, claimFor('alice'));
+        w.publicDevices = [device(1), revocation(1)];
+        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /not bound to the address/);
+    });
+
+    it('public relays are not waited on once this relay binds the signer', { timeout: 2000 }, async () => {
         const { w, deps } = world();
         chainFor(w, claimFor('alice'));
-        w.publicDevices = [revocation(1)];
-        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /not bound to the address/);
+        deps.publicDeviceEvents = () => new Promise(() => {});
+        assert.deepEqual(await createGate(deps, { ...LIMITS, deadlineMs: 500 }).check(msg(listingEvent('alice'))), { action: 'accept' });
+    });
+});
+
+describe('a device record', () => {
+    const write = (ev) => createGate(world().deps).check({ ...msg(ev), event: ev });
+
+    it('is admitted with a BIP-322 signature by the address its slot names, a revocation too', async () => {
+        assert.deepEqual(await write(device(3)), { action: 'accept' });
+        assert.deepEqual(await write(revocation(3)), { action: 'accept' });
+    });
+
+    it('is refused without one, so no one else can fill an address slot', async () => {
+        const other = 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh';
+        // Signed for another address, filed under ADDR.
+        const misfiled = device(4, other);
+        const { nostrSk } = nostr(4);
+        const moved = signNostrEvent(
+            { pubkey: misfiled.pubkey, kind: 30078, created_at: misfiled.created_at, content: misfiled.content, tags: misfiled.tags.map((t) => (t[0] === 'd' ? ['d', `oc-lock:device:${ADDR}`] : t)) },
+            nostrSk
+        );
+        assert.match((await write(moved)).msg, /^invalid: a device record needs a BIP-322 signature/);
+        // A wrong signature.
+        const forged = signNostrEvent(
+            { pubkey: misfiled.pubkey, kind: 30078, created_at: 1_790_000_000, content: device(4).content, tags: device(4).tags.map((t) => (t[0] === 'binding_sig' ? ['binding_sig', 'sig:nobody'] : t)) },
+            nostrSk
+        );
+        assert.match((await write(forged)).msg, /^invalid: a device record needs a BIP-322 signature/);
+    });
+
+    it('costs no chain or relay read, and is limited per source apart from listings', async () => {
+        const { w, deps } = world();
+        const gate = createGate(deps);
+        for (let i = 0; i < LIMITS.perIp; i++) assert.equal((await gate.check(msg(device(5)))).action, 'accept');
+        assert.match((await gate.check(msg(device(5)))).msg, /^rate-limited: too many device records/);
+        assert.deepEqual(w.reads, { tip: 0, header: 0, coin: 0, device: 0, stored: 0 });
+        chainFor(w, claimFor('alice'));
+        assert.equal((await gate.check(msg(listingEvent('alice')))).action, 'accept');
     });
 });
 
