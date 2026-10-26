@@ -50,7 +50,7 @@ jobs:
                   grep -q 'oc-dtag-filter.py' strfry.conf
                   # strfry stores the connection's address with each event,
                   # so it must not read a visitor address from any header.
-                  if grep -qE '^[[:space:]]*realIpHeader[[:space:]]*=' strfry.conf; then echo 'realIpHeader must stay unset'; exit 1; fi
+                  if grep -qE '^[^#]*realIpHeader' strfry.conf; then echo 'realIpHeader must stay unset'; exit 1; fi
                   echo "strfry.conf shape ok"
 
             - name: write-policy plugin compiles
