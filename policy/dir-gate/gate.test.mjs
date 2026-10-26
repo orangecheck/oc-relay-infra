@@ -134,3 +134,15 @@ async function fakeRelay() {
         close: () => server.close(),
     };
 }
+
+describe('the relay gate.mjs reads', () => {
+    it("is strfry's own address from strfry.conf, not the front's", () => {
+        const conf = readFileSync(join(here, '..', '..', 'strfry.conf'), 'utf8');
+        const relay = conf.slice(conf.indexOf('\nrelay {'));
+        const bind = relay.match(/^\s*bind = "([^"]+)"/m)?.[1];
+        const port = relay.match(/^\s*port = (\d+)/m)?.[1];
+        const source = readFileSync(join(here, 'gate.mjs'), 'utf8');
+        assert.ok(bind && port, 'strfry.conf names a bind and a port');
+        assert.match(source, new RegExp(`\\|\\| 'ws://${bind.replaceAll('.', '\\.')}:${port}';`));
+    });
+});
