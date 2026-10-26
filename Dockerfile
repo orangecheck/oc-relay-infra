@@ -30,7 +30,7 @@ FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf
 WORKDIR /gate
 COPY policy/dir-gate/package.json policy/dir-gate/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
-COPY policy/dir-gate/gate.mjs policy/dir-gate/rules.mjs ./
+COPY policy/dir-gate/gate.mjs policy/dir-gate/rules.mjs policy/dir-gate/tally.mjs ./
 RUN mkdir -p /opt/node/bin /opt/node/lib \
     && cp /usr/local/bin/node /opt/node/bin/ \
     && cp /lib/ld-musl-x86_64.so.1 /opt/node/lib/ \

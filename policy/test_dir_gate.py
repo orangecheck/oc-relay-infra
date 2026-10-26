@@ -13,6 +13,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = pathlib.Path(__file__).parent
@@ -26,12 +27,22 @@ def line(eid, kind, d):
                        "receivedAt": 0, "sourceType": "IP4", "sourceInfo": "203.0.113.1"})
 
 
-def run(lines, mode, timeout="0.5"):
-    env = dict(os.environ, OC_DIR_GATE_CMD=json.dumps([sys.executable, str(FAKE)]),
-               OC_DIR_GATE_TIMEOUT_S=timeout, FAKE_GATE_MODE=mode)
+COUNTS = pathlib.Path(tempfile.mkdtemp()) / "bridge-counts.json"
+
+
+def counted():
+    days = json.loads(COUNTS.read_text()) if COUNTS.exists() else {}
+    COUNTS.unlink(missing_ok=True)
+    return next(iter(days.values()), {})
+
+
+def run(lines, mode, timeout="0.5", cmd=None):
+    env = dict(os.environ, OC_DIR_GATE_CMD=json.dumps(cmd or [sys.executable, str(FAKE)]),
+               OC_DIR_GATE_TIMEOUT_S=timeout, FAKE_GATE_MODE=mode, OC_DIR_GATE_BRIDGE_COUNTS=str(COUNTS))
     started = time.monotonic()
     out = subprocess.run([sys.executable, str(PLUGIN)], input="\n".join(lines) + "\n", capture_output=True,
                          text=True, env=env, timeout=30)
+    run.stderr = out.stderr
     return [json.loads(x) for x in out.stdout.splitlines()], time.monotonic() - started
 
 
@@ -53,8 +64,13 @@ got, _ = run([DIR], "reject")
 if got != [{"id": "d1", "action": "reject", "msg": "invalid: fake"}]:
     failures.append(f"reject passes through: {got}")
 
+# Every refusal is counted under its reason, and logged with today's count.
+WHY = {"hang": "timeout", "die": "sidecar exited", "garble": "garbled answer", "wrongid": "timeout"}
+counted()
 for mode in ("hang", "die", "garble", "wrongid"):
     got, took = run([STAMP, DIR, AFTER, DIR], mode)
+    if counted() != {WHY[mode]: 2} or f"refused ({WHY[mode]}, 2 today)" not in run.stderr:
+        failures.append(f"{mode}: refusals not counted as {WHY[mode]!r}: {run.stderr!r}")
     want = [{"id": "s1", "action": "accept"}, {"id": "d1", "action": "reject", "msg": BUSY},
             {"id": "s2", "action": "accept"}, {"id": "d1", "action": "reject", "msg": BUSY}]
     if got != want:
@@ -68,12 +84,12 @@ if got != [{"id": "hangme", "action": "reject", "msg": BUSY}, {"id": "d2", "acti
     failures.append(f"stuck sidecar not replaced: {got}")
 
 # With the sidecar missing altogether, 30114 is refused and nothing else changes.
-env = dict(os.environ, OC_DIR_GATE_CMD=json.dumps(["/nonexistent/node"]))
-out = subprocess.run([sys.executable, str(PLUGIN)], input=STAMP + "\n" + DIR + "\n", capture_output=True, text=True,
-                     env=env, timeout=30)
-got = [json.loads(x) for x in out.stdout.splitlines()]
+counted()
+got, _ = run([STAMP, DIR], "accept", cmd=["/nonexistent/node"])
 if got != [{"id": "s1", "action": "accept"}, {"id": "d1", "action": "reject", "msg": BUSY}]:
     failures.append(f"missing sidecar: {got}")
+if counted() != {"sidecar did not start": 1}:
+    failures.append("missing sidecar: refusal not counted")
 
 if failures:
     print("FAIL\n" + "\n".join(failures))

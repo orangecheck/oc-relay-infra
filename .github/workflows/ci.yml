@@ -104,6 +104,7 @@ jobs:
                   test -f policy/test_dir_gate.py
                   test -f policy/dir-gate/gate.mjs
                   test -f policy/dir-gate/rules.mjs
+                  test -f policy/dir-gate/tally.mjs
                   test -f policy/dir-gate/package-lock.json
                   test -f sync/backfill.sh
                   test -f front/main.go

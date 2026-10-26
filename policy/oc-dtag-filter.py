@@ -134,6 +134,30 @@ GATE_CMD = json.loads(os.environ.get("OC_DIR_GATE_CMD") or "null") or [
 ]
 GATE_TIMEOUT_S = float(os.environ.get("OC_DIR_GATE_TIMEOUT_S") or "3.0")
 GATE_BUSY = "rate-limited: directory check busy, try again"
+# Why the bridge refused, counted per UTC day beside the sidecar's own counts.
+BRIDGE_COUNTS = os.environ.get("OC_DIR_GATE_BRIDGE_COUNTS", "/data/strfry/db/dir-gate-bridge-counts.json")
+
+
+def count_refusal(why, path=BRIDGE_COUNTS):
+    days = {}
+    try:
+        with open(path) as f:
+            days = json.load(f)
+        if not isinstance(days, dict):
+            days = {}
+    except Exception:
+        pass
+    today = days.setdefault(time.strftime("%Y-%m-%d", time.gmtime()), {})
+    today[why] = today.get(why, 0) + 1
+    try:
+        days = {k: days[k] for k in sorted(days)[-14:]}
+        with open(path + ".tmp", "w") as f:
+            json.dump(days, f)
+        os.replace(path + ".tmp", path)
+    except Exception:
+        pass
+    sys.stderr.write("oc-dtag-filter: directory check refused (%s, %d today)\n" % (why, today[why]))
+    sys.stderr.flush()
 
 
 class DirGate:
@@ -189,9 +213,13 @@ class DirGate:
                 if not chunk:
                     raise EOFError()
                 self.buf += chunk
-        except Exception:
+        except Exception as err:
             # A late answer must never be read as the next event's, so the sidecar goes.
             self._stop()
+            why = {TimeoutError: "timeout", EOFError: "sidecar exited", BrokenPipeError: "sidecar exited",
+                   ValueError: "garbled answer", FileNotFoundError: "sidecar did not start",
+                   PermissionError: "sidecar did not start"}.get(type(err), "bridge error")
+            count_refusal(why)
             return {"id": eid, "action": "reject", "msg": GATE_BUSY}
 
 

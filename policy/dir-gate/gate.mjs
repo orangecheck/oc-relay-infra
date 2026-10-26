@@ -10,9 +10,11 @@ import { esploraCoinReader } from '@orangecheck/lock-core/directory';
 import { mempoolHeaderSource } from '@orangecheck/stamp-ots';
 
 import { createGate } from './rules.mjs';
+import { createTally } from './tally.mjs';
 
 const ESPLORA = (process.env.OC_DIR_GATE_ESPLORA || 'https://mempool.space/api').replace(/\/+$/, '');
 const RELAY = process.env.OC_DIR_GATE_RELAY || 'ws://127.0.0.1:7777';
+const COUNTS = process.env.OC_DIR_GATE_COUNTS ?? '/data/strfry/db/dir-gate-counts.json';
 const HTTP_TIMEOUT_MS = 2000;
 const RELAY_TIMEOUT_MS = 1500;
 
@@ -88,6 +90,8 @@ const gate = createGate({
     now: () => Date.now(),
 });
 
+const tally = createTally({ file: COUNTS || undefined });
+
 // strfry sends one event at a time and waits; answers go out in arrival order.
 let chain = Promise.resolve();
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -103,7 +107,9 @@ lines.on('line', (line) => {
         const started = Date.now();
         const out = await gate.check(msg);
         const d = (msg?.event?.tags ?? []).find((t) => Array.isArray(t) && t[0] === 'd')?.[1] ?? '';
-        process.stderr.write(`dir-gate: ${out.action}${out.msg ? ` (${out.msg})` : ''} d=${String(d).slice(0, 30)} ${Date.now() - started}ms\n`);
+        const reason = out.action === 'accept' ? 'accept' : out.msg;
+        const n = tally.count(reason);
+        process.stderr.write(`dir-gate: ${reason} (${n} today) d=${String(d).slice(0, 30)} ${Date.now() - started}ms\n`);
         process.stdout.write(JSON.stringify({ id: msg.id ?? id, ...out }) + '\n');
     });
 });
