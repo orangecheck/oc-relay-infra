@@ -4,6 +4,10 @@
 
 # Editor
 .DS_Store
+
+# Python bytecode (the plugin runs from its .py)
+__pycache__/
+*.pyc
 .vscode/
 .idea/
 
