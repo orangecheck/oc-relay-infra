@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -229,8 +230,11 @@ func TestWebSocketUpgradeCarriesThePseudonymAndPassesBytes(t *testing.T) {
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	nonce := make([]byte, 16)
+	rand.Read(nonce)
 	conn.Write([]byte("GET / HTTP/1.1\r\nHost: relay.ochk.io\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n" +
-		"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nFly-Client-IP: 2001:db8:1:2::5\r\n\r\n"))
+		"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: " + base64.StdEncoding.EncodeToString(nonce) +
+		"\r\nFly-Client-IP: 2001:db8:1:2::5\r\n\r\n"))
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {

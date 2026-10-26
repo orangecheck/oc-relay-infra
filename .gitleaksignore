@@ -1,0 +1,2 @@
+# A WebSocket test sent RFC 6455's sample Sec-WebSocket-Key; the test now makes a random one.
+f7c692aa5ecb4bdf2469f565887d7d68e7cf51fa:front/main_test.go:generic-api-key:228
