@@ -113,6 +113,8 @@ function world(over = {}) {
         },
         coin: async (op) => (w.reads.coin++, w.coinHangs ? new Promise(() => {}) : (w.coins.get(op) ?? 'no-answer')),
         deviceEvents: async () => (w.reads.device++, w.deviceFails ? 'no-answer' : w.devices),
+        deviceEventsBy: async (_a, pk) => (w.ownFails ? 'no-answer' : w.devices.filter((e) => e.pubkey === pk)),
+        publicDeviceEvents: async () => ({ events: w.publicDevices ?? [], allAnswered: !w.publicFails }),
         stored: async (d) => (w.reads.stored++, w.stored.filter((e) => e.tags.some((t) => t[0] === 'd' && t[1] === d))),
         allStored: async () => w.stored,
         verifyBip322,
@@ -209,7 +211,8 @@ describe('a read without an answer refuses, never admits', () => {
         ['the tip', (w) => (w.tipFails = true)],
         ['a header', (w) => (w.headerFails = true)],
         ['the coin', (w) => w.coins.clear()],
-        ['the device records', (w) => (w.deviceFails = true)],
+        ['the device records', (w) => ((w.deviceFails = true), (w.ownFails = true))],
+        ['a public relay, for a key not bound here', (w) => ((w.devices = []), (w.publicFails = true))],
     ]) {
         it(name, async () => {
             const { w, deps } = world();
@@ -217,7 +220,7 @@ describe('a read without an answer refuses, never admits', () => {
             set(w);
             assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /^rate-limited: /);
             // Cheapest first: an anchor that cannot be read costs no binding read.
-            if (name !== 'the coin' && name !== 'the device records') assert.equal(w.reads.device, 0);
+            if (name === 'the tip' || name === 'a header') assert.equal(w.reads.device, 0);
         });
     }
 
@@ -229,6 +232,29 @@ describe('a read without an answer refuses, never admits', () => {
         const out = await createGate(deps, { ...LIMITS, deadlineMs: 50 }).check(msg(listingEvent('alice')));
         assert.match(out.msg, /^rate-limited: the directory check took too long/);
         assert.ok(Date.now() - started < 1000);
+    });
+});
+
+describe('where bindings are read', () => {
+    it("records piled into the address's slot cannot hide the signer's own", async () => {
+        const { w, deps } = world();
+        chainFor(w, claimFor('alice'));
+        w.deviceFails = true; // the full read of the slot gives up
+        assert.deepEqual(await createGate(deps).check(msg(listingEvent('alice'))), { action: 'accept' });
+    });
+
+    it('a device record published only to public relays binds too', async () => {
+        const { w, deps } = world({ devices: [] });
+        chainFor(w, claimFor('alice'));
+        w.publicDevices = [device(1)];
+        assert.deepEqual(await createGate(deps).check(msg(listingEvent('alice'))), { action: 'accept' });
+    });
+
+    it('a revocation read anywhere retires the key', async () => {
+        const { w, deps } = world();
+        chainFor(w, claimFor('alice'));
+        w.publicDevices = [revocation(1)];
+        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /not bound to the address/);
     });
 });
 
@@ -256,6 +282,20 @@ describe('limits', () => {
         const other = claimFor('bob', { outpoint: `${'cd'.repeat(32)}:1`, height: ANCHOR - 1 });
         w.coins.set(other.claim.outpoint, { confirmedAt: ANCHOR - 200, value: 546, paysTo: ADDR, spendHeight: null });
         assert.match((await gate.check(msg(listingEvent('bob', { claim: other })))).msg, /^rate-limited: /);
+    });
+
+    it('one source spends at most its share of the chain budget', async () => {
+        const { w, deps } = world();
+        const gate = createGate(deps, { ...LIMITS, chainReadsPerSource: 3, perIp: 100 });
+        const fresh = (i) => {
+            const cl = claimFor('han' + i, { outpoint: `${String(i).padStart(2, '0').repeat(32)}:0`, height: ANCHOR - i });
+            chainFor(w, cl);
+            return listingEvent('han' + i, { claim: cl });
+        };
+        // 3 reads (tip, header, coin) spend the first source's share; its next claim needs more.
+        assert.deepEqual(await gate.check(msg(fresh(1), '203.0.113.7')), { action: 'accept' });
+        assert.match((await gate.check(msg(fresh(2), '203.0.113.7'))).msg, /^rate-limited: /);
+        assert.equal((await gate.check(msg(fresh(3), '203.0.113.8'))).action, 'accept');
     });
 
     it('one live claim per coin; a tombstoned one frees it', async () => {

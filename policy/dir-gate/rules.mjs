@@ -22,6 +22,8 @@ export const LIMITS = {
     perSource: 30,
     /** Chain reads (tip, headers, coins) per minute, all writers together. */
     chainReads: 120,
+    /** Of those, what one source may spend in a minute. */
+    chainReadsPerSource: 30,
     /** Answer within this, or refuse: strfry waits on every check. */
     deadlineMs: 2500,
 };
@@ -70,6 +72,8 @@ function windows(now) {
  *   headers: { getHeaderAt(height): Promise<Uint8Array | null> }, throws likewise
  *   coin(outpoint): Promise<CoinFacts | 'no-answer'>
  *   deviceEvents(address): Promise<NostrEvent[] | 'no-answer'>, kind-30078 records on this relay
+ *   deviceEventsBy(address, pubkey): the same, signed by `pubkey` only (a few records, never flooded out)
+ *   publicDeviceEvents(address): Promise<{ events: NostrEvent[]; allAnswered: boolean }>, from public relays
  *   stored(dtag): Promise<NostrEvent[] | 'no-answer'>, kind-30114 events on this relay at a d tag
  *   allStored(): Promise<NostrEvent[] | 'no-answer'>, every kind-30114 event on this relay
  *   verifyBip322({ address, message, signature }): boolean | Promise<boolean>
@@ -77,19 +81,22 @@ function windows(now) {
  */
 export function createGate(deps, limits = LIMITS) {
     const take = windows(deps.now);
+    const takeChain = windows(deps.now);
     let spent = { start: -Infinity, n: 0 };
-    const budget = () => {
+    // A chain read is charged to the global budget and to the source that caused it.
+    const budget = (source) => {
         const t = deps.now();
         if (t - spent.start >= 60_000) spent = { start: t, n: 0 };
         if (spent.n >= limits.chainReads) return false;
+        if (!takeChain(source, limits.chainReadsPerSource)) return false;
         spent.n++;
         return true;
     };
 
     let tipCache = null;
-    const tip = async () => {
+    const tip = async (source) => {
         if (tipCache && deps.now() - tipCache.at < TIP_TTL_MS) return tipCache.height;
-        if (!budget()) throw new NoAnswer();
+        if (!budget(source)) throw new NoAnswer();
         const height = await deps.tip();
         if (!Number.isSafeInteger(height) || height <= 0) throw new NoAnswer();
         tipCache = { height, at: deps.now() };
@@ -97,22 +104,22 @@ export function createGate(deps, limits = LIMITS) {
     };
 
     const headerCache = new Map();
-    const headers = {
+    const headersFor = (source) => ({
         async getHeaderAt(height) {
             if (headerCache.has(height)) return headerCache.get(height);
-            if (!budget()) throw new NoAnswer();
+            if (!budget(source)) throw new NoAnswer();
             const h = await deps.headers.getHeaderAt(height);
             // Only a header buried 6 deep is kept; anything nearer the tip can still change.
             if (h && tipCache && height <= tipCache.height - DEEP) remember(headerCache, height, h);
             return h;
         },
-    };
+    });
 
     const coinCache = new Map();
-    const coin = async (outpoint) => {
+    const coin = async (outpoint, source) => {
         const c = coinCache.get(outpoint);
         if (c && (c.final || deps.now() - c.at < COIN_TTL_MS)) return c.facts;
-        if (!budget()) return 'no-answer';
+        if (!budget(source)) return 'no-answer';
         const facts = await deps.coin(outpoint);
         if (facts === 'no-answer') return facts;
         // A spend buried 6 deep does not change; the rest is kept a minute.
@@ -121,11 +128,24 @@ export function createGate(deps, limits = LIMITS) {
         return facts;
     };
 
-    const boundKeys = async (address) => {
-        const events = await deps.deviceEvents(address);
-        if (events === 'no-answer') return 'no-answer';
-        const verified = await verifyDeviceRecords(events, address, { verifyBip322: deps.verifyBip322 });
-        return boundNostrKeys(verified, { now: new Date(deps.now()) });
+    // The keys bound to `address`, read here and from public relays at once. The signer's own
+    // records are read apart, so records others pile into the address's slot cannot hide them.
+    // Its key found bound is an answer even when the full read failed; not found is one only
+    // when every read answered.
+    const boundKeys = async (address, signer) => {
+        const [all, own, pub] = await Promise.all([
+            deps.deviceEvents(address),
+            deps.deviceEventsBy(address, signer),
+            deps.publicDeviceEvents(address).catch(() => ({ events: [], allAnswered: false })),
+        ]);
+        const byId = new Map();
+        for (const e of [...(all === 'no-answer' ? [] : all), ...(own === 'no-answer' ? [] : own), ...pub.events]) {
+            if (e && typeof e.id === 'string') byId.set(e.id, e);
+        }
+        const verified = await verifyDeviceRecords([...byId.values()], address, { verifyBip322: deps.verifyBip322 });
+        const keys = boundNostrKeys(verified, { now: new Date(deps.now()) });
+        if (keys.includes(signer)) return keys;
+        return all === 'no-answer' || own === 'no-answer' || !pub.allAnswered ? 'no-answer' : keys;
     };
 
     // One live claim per current coin per namespace (§8.2.6): coin -> the claim it backs.
@@ -155,8 +175,9 @@ export function createGate(deps, limits = LIMITS) {
         return carried && !ended;
     };
 
-    async function listing(ev, rec, d, ns) {
-        const height = await tip();
+    async function listing(ev, rec, d, ns, source) {
+        const height = await tip(source);
+        const headers = headersFor(source);
         const anchor = await directoryAnchor(rec.claim.ots, rec.claimId, headers);
         if (anchor === null) return reject('invalid: the claim is not anchored (OC Chat §8.2.1)');
         if (typeof anchor !== 'number') throw new NoAnswer();
@@ -168,8 +189,8 @@ export function createGate(deps, limits = LIMITS) {
         }
         let keys = null;
         const reader = {
-            boundKeys: async (address) => (keys = await boundKeys(address)),
-            coin,
+            boundKeys: async (address) => (keys = await boundKeys(address, ev.pubkey)),
+            coin: (outpoint) => coin(outpoint, source),
         };
         const record = {
             kind: 'listing',
@@ -200,7 +221,7 @@ export function createGate(deps, limits = LIMITS) {
     }
 
     async function tombstone(ev, rec, d) {
-        const keys = await boundKeys(rec.address);
+        const keys = await boundKeys(rec.address, ev.pubkey);
         if (keys === 'no-answer') throw new NoAnswer();
         if (!keys.includes(ev.pubkey)) {
             return reject('invalid: the signing key is not bound to the address by a device record on this relay (OC Lock §3)');
@@ -242,7 +263,7 @@ export function createGate(deps, limits = LIMITS) {
             return reject('rate-limited: too many directory writes from here, try again in a minute');
         }
         try {
-            return rec.kind === 'tombstone' ? await tombstone(ev, rec, d) : await listing(ev, rec, d, ns);
+            return rec.kind === 'tombstone' ? await tombstone(ev, rec, d) : await listing(ev, rec, d, ns, source);
         } catch (err) {
             if (err instanceof NoAnswer) return busy('a chain or relay read did not answer');
             throw err;

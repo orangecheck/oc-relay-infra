@@ -14,14 +14,19 @@ import { createTally } from './tally.mjs';
 
 const ESPLORA = (process.env.OC_DIR_GATE_ESPLORA || 'https://mempool.space/api').replace(/\/+$/, '');
 const RELAY = process.env.OC_DIR_GATE_RELAY || 'ws://127.0.0.1:7777';
+// Public relays OC Chat clients publish device records to (its CHAT_RELAYS), read for bindings too.
+const PUBLIC_RELAYS = (process.env.OC_DIR_GATE_PUBLIC_RELAYS ?? 'wss://relay.damus.io,wss://nos.lol')
+    .split(',')
+    .map((r) => r.trim())
+    .filter(Boolean);
 const COUNTS = process.env.OC_DIR_GATE_COUNTS ?? '/data/strfry/db/dir-gate-counts.json';
 const HTTP_TIMEOUT_MS = 2000;
 const RELAY_TIMEOUT_MS = 1500;
 
 const timedFetch = (url, init = {}) => fetch(url, { ...init, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
 
-/** Every event this relay returns for one filter, paged by `until`, or 'no-answer'. */
-async function query(filter, { pages = 1 } = {}) {
+/** Every event a relay (this one by default) returns for one filter, paged by `until`, or 'no-answer'. */
+async function query(filter, { pages = 1, relay = RELAY } = {}) {
     const all = new Map();
     let until;
     for (let page = 0; page < pages; page++) {
@@ -37,7 +42,7 @@ async function query(filter, { pages = 1 } = {}) {
             };
             const timer = setTimeout(() => done('no-answer'), RELAY_TIMEOUT_MS);
             try {
-                ws = new WebSocket(RELAY);
+                ws = new WebSocket(relay);
             } catch {
                 return done('no-answer');
             }
@@ -84,6 +89,17 @@ const gate = createGate({
     headers: mempoolHeaderSource({ baseUrl: ESPLORA, fetch: timedFetch }),
     coin: (outpoint) => coinReader(outpoint),
     deviceEvents: (address) => query({ kinds: [30078], '#d': [`oc-lock:device:${address}`], limit: 500 }, { pages: 4 }),
+    deviceEventsBy: (address, pubkey) =>
+        query({ kinds: [30078], '#d': [`oc-lock:device:${address}`], authors: [pubkey], limit: 50 }),
+    async publicDeviceEvents(address) {
+        const reads = await Promise.all(
+            PUBLIC_RELAYS.map((relay) => query({ kinds: [30078], '#d': [`oc-lock:device:${address}`], limit: 500 }, { relay }))
+        );
+        return {
+            events: reads.flatMap((r) => (r === 'no-answer' ? [] : r)),
+            allAnswered: reads.every((r) => r !== 'no-answer'),
+        };
+    },
     stored: (d) => query({ kinds: [30114], '#d': [d], limit: 500 }),
     allStored: () => query({ kinds: [30114], limit: 500 }, { pages: 40 }),
     verifyBip322: ({ address, message, signature }) => verifySignature(address, message, signature),
