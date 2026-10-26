@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 
 import { channelClaimId, channelDirectoryDtag, channelId, claimId, directoryDtag } from '@orangecheck/lock-core/directory';
 import {
+    BINDING_VERSION,
     buildBindingStatement,
     buildRevocationStatement,
     deriveNostrKey,
@@ -354,6 +355,44 @@ describe('a device record', () => {
         // Its own read without an answer is busy, never an admission.
         w.ownFails = true;
         assert.match((await createGate(deps).check(msg(advice(1)))).msg, /^rate-limited: /);
+    });
+
+    const revokes = (deviceId, address = ADDR) =>
+        buildRevocationStatement({ address, device_id: deviceId, revoked_at: '2026-10-03T00:00:00Z' });
+
+    it('an unsigned revocation retracts only the signer\'s own device; one naming a sibling is refused', async () => {
+        const { deps } = world({ devices: [device(1), device(2)] });
+        assert.match((await createGate(deps).check(msg(advice(1, revokes('dev2'))))).msg, /^invalid: a device record needs a BIP-322 signature/);
+        assert.deepEqual(await createGate(deps).check(msg(advice(1, revokes('dev1')))), { action: 'accept' });
+    });
+
+    it('counts only the signer\'s own record, though the read returns the whole slot', async () => {
+        const { w, deps } = world({ devices: [device(2)] });
+        deps.deviceEventsBy = async () => w.devices;
+        assert.match((await createGate(deps).check(msg(advice(7, revokes('dev2'))))).msg, /^invalid: a device record needs a BIP-322 signature/);
+    });
+
+    it('reads the address and device_id lines whole, and the first of each, as lock-device does', async () => {
+        const OTHER = 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh';
+        const head = `oc-lock:device-revoke:${BINDING_VERSION}`;
+        const stmt = (...lines) => [head, ...lines, 'revoked_at: 2026-10-03T00:00:00Z'].join('\n') + '\n';
+        // Key 8's record in this slot binds no device of this address; key 9's names none.
+        const misfiled = { ...device(8, OTHER), tags: [['d', `oc-lock:device:${ADDR}`]] };
+        const { nostrSk, nostrPk } = nostr(9);
+        const unnamed = signNostrEvent(
+            { pubkey: nostrPk, kind: 30078, created_at: 1_790_000_000, content: `oc-lock:device-bind:${BINDING_VERSION}\naddress: ${ADDR}\n`, tags: [['d', `oc-lock:device:${ADDR}`]] },
+            nostrSk
+        );
+        const { deps } = world({ devices: [device(1), device(2), misfiled, unnamed] });
+        for (const [n, content] of [
+            [1, stmt(`address: ${ADDR}x`, 'device_id: dev1')],
+            [1, stmt(`address: ${OTHER}`, `address: ${ADDR}`, 'device_id: dev1')],
+            [1, stmt(`address: ${ADDR}`, 'device_id: dev2', 'device_id: dev1')],
+            [8, stmt(`address: ${ADDR}`, 'device_id: dev8')],
+            [9, stmt(`address: ${ADDR}`)],
+        ]) {
+            assert.match((await createGate(deps).check(msg(advice(n, content)))).msg, /^invalid: a device record needs a BIP-322 signature/, content);
+        }
     });
 
     it('anything else unsigned from a key in the slot, a re-bind included, goes through the BIP-322 path', async () => {

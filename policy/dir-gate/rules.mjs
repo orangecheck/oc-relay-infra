@@ -5,7 +5,7 @@
 // refuses with "rate-limited:", never admits. The rule itself is lock-core's.
 // A kind-30078 device record (oc-lock:device:<address>) is admitted only with a
 // BIP-322 signature by that address, so no one else can fill an address's slot,
-// or as a revocation by a key that already holds a record there.
+// or as a revocation of its own device by a key that already holds a record there.
 
 import {
     channelDirectoryDtag,
@@ -253,11 +253,16 @@ export function createGate(deps, limits = LIMITS) {
         const verified = await verifyDeviceRecords([ev], address, { verifyBip322: deps.verifyBip322 });
         if (verified.length === 1) return { action: 'accept' };
         // A key that already holds a record in the slot may replace it with a revocation of its
-        // own, signed or not (OC Lock's unsigned advice). That replaces its record; it adds none.
-        if (verifyNostrEvent(ev) && isRevocationFor(ev.content, address)) {
+        // own device, signed or not (OC Lock's unsigned advice). That replaces its record; it adds none.
+        const revoked = statementOf(ev.content);
+        if (verifyNostrEvent(ev) && revoked.header === REVOKE_HEADER && revoked.address === address && revoked.deviceId) {
             const own = await deps.deviceEventsBy(address, ev.pubkey);
             if (own === 'no-answer') return busy('a relay read did not answer');
-            if (own.some((e) => e?.pubkey === ev.pubkey)) return { action: 'accept' };
+            const ownDevice = (e) => {
+                const st = statementOf(e?.content);
+                return e?.pubkey === ev.pubkey && st.address === address && st.deviceId === revoked.deviceId;
+            };
+            if (own.some(ownDevice)) return { action: 'accept' };
         }
         return reject('invalid: a device record needs a BIP-322 signature by the address its d tag names (OC Lock §3)');
     }
@@ -316,10 +321,16 @@ export function createGate(deps, limits = LIMITS) {
     };
 }
 
-/** A revocation statement (OC Lock §3.5) naming `address`. */
-function isRevocationFor(content, address) {
+const REVOKE_HEADER = `oc-lock:device-revoke:${BINDING_VERSION}`;
+
+/** A device statement's header and its address and device_id, each the first line naming it, as lock-device reads them (OC Lock §3.5). */
+function statementOf(content) {
     const lines = typeof content === 'string' ? content.split('\n') : [];
-    return lines[0] === `oc-lock:device-revoke:${BINDING_VERSION}` && lines.includes(`address: ${address}`);
+    const field = (name) => {
+        const line = lines.slice(1).find((l) => l.startsWith(`${name}: `));
+        return line === undefined ? null : line.slice(name.length + 2);
+    };
+    return { header: lines[0], address: field('address'), deviceId: field('device_id') };
 }
 
 /** A stored 30114 event as the namespace it sits in, its d tag and its parsed record. */
