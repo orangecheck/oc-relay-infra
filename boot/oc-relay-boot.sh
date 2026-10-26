@@ -17,11 +17,10 @@ DONE="$DB/.sources-cleared-1"
 
 say() { echo "oc-relay-boot: $*"; }
 
+# The sorted event ids of a JSONL export; fails, with no pipe to hide it, on an unreadable line.
 ids() {
     python3 -c 'import json, sys
-for line in sys.stdin:
-    if line.strip():
-        print(json.loads(line)["id"])' | sort
+print("\n".join(sorted(json.loads(l)["id"] for l in sys.stdin if l.strip())))'
 }
 
 rewrite() {

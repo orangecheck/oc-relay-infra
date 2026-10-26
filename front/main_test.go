@@ -87,11 +87,13 @@ func TestIPv6IsNamedByItsSlash64(t *testing.T) {
 type upstream struct {
 	mu      sync.Mutex
 	headers []http.Header
+	hosts   []string
 }
 
 func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
 	u.headers = append(u.headers, r.Header.Clone())
+	u.hosts = append(u.hosts, r.Host)
 	u.mu.Unlock()
 	if r.Header.Get("Upgrade") == "websocket" {
 		conn, rw, err := w.(http.Hijacker).Hijack()
@@ -158,6 +160,9 @@ func TestStrfryGetsThePseudonymAndNoHeaderNamingTheVisitor(t *testing.T) {
 		"CF-Connecting-IP": "203.0.113.7",
 	})
 	h := up.last()
+	if host := up.hosts[len(up.hosts)-1]; host != strings.TrimPrefix(front.URL, "http://") {
+		t.Fatalf("strfry saw Host %q, not the visitor's", host)
+	}
 	if got, want := h.Get(SourceHeader), of(t, n, "203.0.113.7").String(); got != want {
 		t.Fatalf("x-oc-source %q, want %q", got, want)
 	}

@@ -118,6 +118,7 @@ func NewFront(names *Names, upstream *url.URL) *Front {
 		// Rewrite (not Director) starts from a request with no X-Forwarded-* headers.
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(upstream)
+			pr.Out.Host = pr.In.Host
 			for _, h := range clientHeaders {
 				pr.Out.Header.Del(h)
 			}
