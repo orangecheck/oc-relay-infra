@@ -20,7 +20,7 @@ say() { echo "oc-relay-boot: $*"; }
 # The sorted event ids of a JSONL export; fails, with no pipe to hide it, on an unreadable line.
 ids() {
     python3 -c 'import json, sys
-print("\n".join(sorted(json.loads(l)["id"] for l in sys.stdin if l.strip())))'
+sys.stdout.write("".join(i + "\n" for i in sorted(json.loads(l)["id"] for l in sys.stdin if l.strip())))'
 }
 
 rewrite() {
