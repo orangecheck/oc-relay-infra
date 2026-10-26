@@ -79,7 +79,7 @@ flyctl logs                                       # tail
 - **Hosting:** Fly.io single region (fra). Anycast available if we ever need it.
 - **Cost ceiling:** <€30/mo year-one (compute + 50 GB volume + monitoring).
 - **Transparency log:** yes — kind + d-tag + ISO date at `relay.ochk.io/transparency`, never event content. Defensible without becoming a content judge.
-- **On-call:** William primary; year one accepts "may stay down until next business day" because the BYPASS invariant means public relays still serve everything.
+- **On-call:** the orangecheck operator; year one accepts "may stay down until next business day" because the BYPASS invariant means public relays still serve everything.
 - **Migration scope:** all seven web repos in Phase 1 (`oc-attest-web` SERVICE_KEY_RELAYS included alongside the six others).
 
 ## Family relationship
