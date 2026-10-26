@@ -48,9 +48,9 @@ jobs:
                   # Assert the plugin is wired and points at the live file.
                   grep -q 'writePolicy' strfry.conf
                   grep -q 'oc-dtag-filter.py' strfry.conf
-                  # The client address strfry logs and passes to the plugin
-                  # comes from Fly-Client-IP (one address, set by Fly's proxy).
-                  grep -q '^    realIpHeader = "fly-client-ip"$' strfry.conf
+                  # strfry stores the connection's address with each event,
+                  # so it must not read a visitor address from any header.
+                  if grep -qE '^[[:space:]]*realIpHeader[[:space:]]*=' strfry.conf; then echo 'realIpHeader must stay unset'; exit 1; fi
                   echo "strfry.conf shape ok"
 
             - name: write-policy plugin compiles
