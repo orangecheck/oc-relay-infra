@@ -190,12 +190,14 @@ DAY_BYTES = 4 * 1024 * 1024  # of event JSON, per source per UTC day
 BRAKE_REFUSALS = 60  # events refused on their merits within an hour...
 BRAKE_S = 3600  # ...refuse everything the source sends for the next hour
 MAX_SOURCES = 50000  # past this, the least recently seen source is forgotten
+FLUSH_S = 1.0  # the counts file is written at most once a second, and on a source's first limit
 RATE_LIMITED = "rate-limited: too many events from this address, try again later"
 LIMIT_COUNTS = os.environ.get("OC_LIMIT_COUNTS", "/data/strfry/db/rate-limit-counts.json")
 
 
 def event_size(event):
-    return len(json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode())
+    # surrogatepass: a lone surrogate (strfry refuses one before this) is counted, not a crash.
+    return len(json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode("utf-8", "surrogatepass"))
 
 
 class SourceLimits:
@@ -207,11 +209,15 @@ class SourceLimits:
         self.limited = set()
         self.counts = {}
         self.base_sources = 0
+        self.dirty = False
+        self.flushed_at = 0.0
 
     def _roll(self, now):
         day = time.strftime("%Y-%m-%d", time.gmtime(now))
         if day == self.day:
             return
+        if self.dirty:
+            self._flush(now)  # the day that ends keeps its last counts
         self.day = day
         self.sources.clear()
         self.limited.clear()
@@ -231,7 +237,9 @@ class SourceLimits:
         except Exception:
             return {}
 
-    def _flush(self):
+    def _flush(self, now):
+        self.dirty = False
+        self.flushed_at = now
         days = self._read()
         days[self.day] = dict(self.counts, sources=self.base_sources + len(self.limited))
         try:
@@ -254,18 +262,18 @@ class SourceLimits:
             self.sources.move_to_end(key)
         return s
 
-    def _limit(self, key, why):
+    def _limit(self, key, why, now):
         self.counts[why] = self.counts.get(why, 0) + 1
-        first = key not in self.limited
-        if first and len(self.limited) < MAX_SOURCES:
-            self.limited.add(key)
-        elif first:
-            self.base_sources += 1  # past the bound, a source may be counted more than once
-        self._flush()
+        self.dirty = True
+        # Up to MAX_SOURCES senders a day are told apart; past that the count stays there.
+        first = key not in self.limited and len(self.limited) < MAX_SOURCES
         if first:
+            self.limited.add(key)
             sys.stderr.write("oc-dtag-filter: a source hit the write limit (%s; %d sources today)\n"
                              % (why, self.base_sources + len(self.limited)))
             sys.stderr.flush()
+        if first or now - self.flushed_at >= FLUSH_S:
+            self._flush(now)
         return why
 
     @staticmethod
@@ -279,17 +287,19 @@ class SourceLimits:
         key = str(msg.get("sourceInfo"))
         now = self.now()
         self._roll(now)
+        if self.dirty and now - self.flushed_at >= FLUSH_S:
+            self._flush(now)
         s = self._source(key, now)
         if s["braked_until"] > now:
-            return self._limit(key, "refusals")
+            return self._limit(key, "refusals", now)
         s["tokens"] = min(float(BURST), s["tokens"] + (now - s["at"]) / REFILL_S)
         s["at"] = now
         if s["tokens"] < 1:
-            return self._limit(key, "burst")
+            return self._limit(key, "burst", now)
         if s["events"] >= DAY_EVENTS:
-            return self._limit(key, "day")
+            return self._limit(key, "day", now)
         if s["bytes"] + size > DAY_BYTES:
-            return self._limit(key, "bytes")
+            return self._limit(key, "bytes", now)
         s["tokens"] -= 1
         s["events"] += 1
         s["bytes"] += size

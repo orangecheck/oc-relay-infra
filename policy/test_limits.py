@@ -17,6 +17,8 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
+import types
 
 HERE = pathlib.Path(__file__).parent
 spec = importlib.util.spec_from_file_location("policy", HERE / "oc-dtag-filter.py")
@@ -143,8 +145,41 @@ again = policy.SourceLimits(path=path, now=clock)
 again.check(msg("fd11::1"), 500)
 for _ in range(31):
     again.check(msg("fd11::1"), 500)
+expect("after a restart, a second limit in the same second waits", json.loads(pathlib.Path(path).read_text()),
+       {"2026-10-27": {"burst": 5, "sources": 3}})
+clock.t += 1
+again.check(msg("fd12::1"), 500)  # any later event writes what waits
 expect("after a restart", json.loads(pathlib.Path(path).read_text()),
        {"2026-10-27": {"burst": 6, "sources": 3}})
+
+# The counts file is written at most once a second (and on a source's first
+# limit): 10,000 limited events over 10 seconds write it about 11 times.
+lim, clock, path = fresh()
+writes, real_replace = [], os.replace
+os.replace = lambda a, b: (writes.append(b), real_replace(a, b))
+try:
+    said = []
+    for _ in range(10_030):
+        said.append(lim.check(msg(A), 500))
+        clock.t += 0.001
+    clock.t += 1
+    lim.check(msg(B), 500)
+finally:
+    os.replace = real_replace
+expect("writes for 10,000 limited events", len(writes) <= 12, True)
+expect("and every one counted", json.loads(pathlib.Path(path).read_text())["2026-10-27"]["burst"], said.count("burst"))
+
+# The day that ends keeps the counts it had not written yet.
+lim, clock, path = fresh(T0 + 86399)
+for _ in range(36):
+    lim.check(msg(A), 500)
+expect("unwritten before midnight", json.loads(pathlib.Path(path).read_text())["2026-10-27"]["burst"], 1)
+clock.t = T0 + 86400.2
+lim.check(msg(B), 500)
+expect("written at the new day", json.loads(pathlib.Path(path).read_text())["2026-10-27"]["burst"], 6)
+
+# A lone surrogate is counted, not a crash.
+expect("event_size of a lone surrogate", policy.event_size({"content": "\ud800"}), len('{"content":"') + 3 + 2)
 
 # The table of sources is bounded; the least recently seen goes first.
 saved, policy.MAX_SOURCES = policy.MAX_SOURCES, 3
@@ -155,12 +190,23 @@ for src in ("fd02::", "fd03::", "fd04::"):
     lim.check(msg(src), 500)
 expect("table size", len(lim.sources), 3)
 expect("the forgotten source starts again", lim.check(msg("fd01::"), 500), None)
+lim, clock, _ = fresh()
+for _ in range(30):
+    lim.check(msg("fd01::"), 500)
+lim.check(msg("fd02::"), 500)
+lim.check(msg("fd03::"), 500)
+lim.check(msg("fd01::"), 500)  # seen again: now the most recent
+lim.check(msg("fd04::"), 500)  # so fd02 goes
+expect("a source seen again is kept", lim.check(msg("fd01::"), 500), "burst")
+expect("the least recently seen went", "fd02::" in lim.sources, False)
 lim, clock, path = fresh()
+logged = sys.stderr.getvalue().count("sources today)")
 for src in ("fd01::", "fd02::", "fd03::", "fd04::"):
     for _ in range(31):
         lim.check(msg(src), 500)
 expect("the set of limited sources is bounded too", len(lim.limited), 3)
-expect("and still counts every source", json.loads(pathlib.Path(path).read_text())["2026-10-27"]["sources"], 4)
+expect("and the count stops there", json.loads(pathlib.Path(path).read_text())["2026-10-27"]["sources"], 3)
+expect("one line per source told apart", sys.stderr.getvalue().count("sources today)") - logged, 3)
 policy.MAX_SOURCES = saved
 
 sys.stderr = quiet
@@ -183,9 +229,16 @@ lines.append(line("i1", 30083, STAMP, "", "Import"))
 env = dict(os.environ, OC_DIR_GATE_CMD=json.dumps([sys.executable, str(HERE / "testdata" / "fake_gate.py")]),
            OC_DIR_GATE_TIMEOUT_S="0.5", FAKE_GATE_MODE="hang", OC_DIR_GATE_BRIDGE_COUNTS=str(tmp / "bridge.json"),
            OC_LIMIT_COUNTS=str(tmp / "limits.json"))
-out = subprocess.run([sys.executable, str(HERE / "oc-dtag-filter.py")], input="\n".join(lines) + "\n",
-                     capture_output=True, text=True, env=env, timeout=30)
+proc = subprocess.Popen([sys.executable, str(HERE / "oc-dtag-filter.py")], stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+proc.stdin.write("\n".join(lines) + "\n")
+proc.stdin.flush()
+time.sleep(1.2)  # the second limit waits for the next event a second on
+proc.stdin.write(line("b2", 30083, STAMP, B) + "\n")
+stdout, stderr = proc.communicate(timeout=30)
+out = types.SimpleNamespace(stdout=stdout, stderr=stderr)
 got = [json.loads(x) for x in out.stdout.splitlines()]
+expect("plugin: the late event", got[34:], [{"id": "b2", "action": "accept"}])
 limited = {"action": "reject", "msg": "rate-limited: too many events from this address, try again later"}
 expect("plugin: 30 accepted", [g["action"] for g in got[:30]], ["accept"] * 30)
 expect("plugin: the 31st", got[30], dict(limited, id="s30"))
@@ -201,9 +254,11 @@ if "a source hit the write limit (burst; 1 sources today)" not in out.stderr or 
 # gate's or the directory gate's), never an acceptance or a busy gate.
 class Recorder(policy.SourceLimits):
     calls = []
+    checked = []
 
     def check(self, msg, size):
-        return None
+        Recorder.checked.append(msg["event"]["id"])
+        return "burst" if msg["event"]["id"] == "rl" else None
 
     def refused(self, msg):
         Recorder.calls.append(msg["event"]["id"])
@@ -215,14 +270,16 @@ os.environ["FAKE_GATE_MODE"] = "reject"
 policy.SourceLimits, policy.GATE_TIMEOUT_S = Recorder, 0.5
 policy.GATE_CMD = [sys.executable, str(HERE / "testdata" / "fake_gate.py")]
 sys.stdin = io.StringIO("\n".join([line("ok", 30083, STAMP, A), line("k1", 1, "x", A),
-                                   line("dev", 30078, DEVICE, A), line("hangme", 30078, DEVICE, A)]) + "\n")
+                                   line("dev", 30078, DEVICE, A), line("hangme", 30078, DEVICE, A),
+                                   line("rl", 1, "x", A)]) + "\n")
 sys.stdout = io.StringIO()
 quiet, sys.stderr = sys.stderr, io.StringIO()
 policy.main()
 answers = [json.loads(x)["action"] for x in sys.stdout.getvalue().splitlines()]
 policy.SourceLimits, policy.GATE_CMD, policy.GATE_TIMEOUT_S, sys.stdin, sys.stdout = saved
 sys.stderr = quiet
-expect("main: answers", answers, ["accept", "reject", "reject", "reject"])
+expect("main: answers", answers, ["accept", "reject", "reject", "reject", "reject"])
+expect("main: every event counted before it is judged", Recorder.checked, ["ok", "k1", "dev", "hangme", "rl"])
 expect("main: refusals counted toward the brake", Recorder.calls, ["k1", "dev"])
 
 if failures:
