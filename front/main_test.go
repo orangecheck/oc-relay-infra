@@ -322,3 +322,39 @@ func running(cmdline string) bool {
 	}
 	return false
 }
+
+func TestHealthCarriesTodaysWriteLimitCounts(t *testing.T) {
+	c := &clock{time.Date(2026, 10, 27, 23, 59, 0, 0, time.UTC)}
+	f, _, front := serve(t, names(c))
+	f.LimitCounts = filepath.Join(t.TempDir(), "rate-limit-counts.json")
+	read := func() any {
+		t.Helper()
+		resp, err := http.Get(front.URL + "/health")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var body map[string]any
+		json.NewDecoder(resp.Body).Decode(&body)
+		if resp.StatusCode != 200 || body["ok"] != true {
+			t.Fatalf("health %d %v", resp.StatusCode, body)
+		}
+		got, _ := json.Marshal(body["rate_limited"])
+		return string(got)
+	}
+	if got, want := read(), `{"day":"2026-10-27","events":{},"sources":0}`; got != want {
+		t.Fatalf("no file: %s, want %s", got, want)
+	}
+	os.WriteFile(f.LimitCounts, []byte(`{"2026-10-26":{"burst":9,"sources":4},"2026-10-27":{"burst":7,"day":1,"sources":3}}`), 0o644)
+	if got, want := read(), `{"day":"2026-10-27","events":{"burst":7,"day":1},"sources":3}`; got != want {
+		t.Fatalf("today: %s, want %s", got, want)
+	}
+	c.t = c.t.Add(2 * time.Minute)
+	if got, want := read(), `{"day":"2026-10-28","events":{},"sources":0}`; got != want {
+		t.Fatalf("a day with no entry: %s, want %s", got, want)
+	}
+	os.WriteFile(f.LimitCounts, []byte(`{"2026-10-28":`), 0o644)
+	if got := read(); got != "null" {
+		t.Fatalf("a file that does not parse: %s, want null", got)
+	}
+}

@@ -75,6 +75,9 @@ jobs:
             - name: kind 30114 goes to the directory gate, and nothing else does
               run: python3 policy/test_dir_gate.py
 
+            - name: per-source write limits
+              run: python3 policy/test_limits.py
+
             - uses: actions/setup-node@v5
               with:
                   node-version: '22'
@@ -102,6 +105,7 @@ jobs:
                   test -f policy/oc-dtag-filter.py
                   test -f policy/test_policy.py
                   test -f policy/test_dir_gate.py
+                  test -f policy/test_limits.py
                   test -f policy/dir-gate/gate.mjs
                   test -f policy/dir-gate/rules.mjs
                   test -f policy/dir-gate/tally.mjs

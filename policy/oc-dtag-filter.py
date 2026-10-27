@@ -17,6 +17,7 @@
 # (verbs 30078,30080-30086; OC Me 30087; OC Chat 30110-30112 + 30114).
 # Reference: https://github.com/hoytech/strfry/blob/master/docs/plugins.md
 
+import collections
 import json
 import os
 import re
@@ -171,6 +172,145 @@ def count_refusal(why, path=BRIDGE_COUNTS):
     sys.stderr.flush()
 
 
+# Per-source write limits. sourceInfo is the front's daily pseudonym for the
+# visitor (an IPv6 address by its /64, front/main.go), so a source is one
+# visitor for one UTC day, and the limits reset when the pseudonyms do.
+# Measured 2026-10-26/27 over 20.7 h: no source sent more than 3 events in a
+# minute; no author has more than 7 stored in a day, and the relay never took
+# more than 11 in a day. Only network writes count: Import, Stream and Sync
+# (backfill, archive) don't. Every event a source sends counts before it is
+# judged, so a flood cannot spend the directory gate's chain reads. The state
+# lives in this process only. The counts file holds totals by reason and how
+# many sources were limited, per day, never which.
+LIMITED_SOURCE_TYPES = ("IP4", "IP6")
+BURST = 30  # events a source may send at once...
+REFILL_S = 2.0  # ...and one more every 2 seconds: 30 a minute
+DAY_EVENTS = 1000  # per source per UTC day
+DAY_BYTES = 4 * 1024 * 1024  # of event JSON, per source per UTC day
+BRAKE_REFUSALS = 60  # events refused on their merits within an hour...
+BRAKE_S = 3600  # ...refuse everything the source sends for the next hour
+MAX_SOURCES = 50000  # past this, the least recently seen source is forgotten
+RATE_LIMITED = "rate-limited: too many events from this address, try again later"
+LIMIT_COUNTS = os.environ.get("OC_LIMIT_COUNTS", "/data/strfry/db/rate-limit-counts.json")
+
+
+def event_size(event):
+    return len(json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode())
+
+
+class SourceLimits:
+    def __init__(self, path=LIMIT_COUNTS, now=time.time):
+        self.path = path
+        self.now = now
+        self.day = None
+        self.sources = collections.OrderedDict()
+        self.limited = set()
+        self.counts = {}
+        self.base_sources = 0
+
+    def _roll(self, now):
+        day = time.strftime("%Y-%m-%d", time.gmtime(now))
+        if day == self.day:
+            return
+        self.day = day
+        self.sources.clear()
+        self.limited.clear()
+        # A restarted plugin keeps the day's totals. A source limited both
+        # before and after a restart is counted twice, never not at all.
+        today = self._read().get(day, {})
+        if not isinstance(today, dict):
+            today = {}
+        self.counts = {k: v for k, v in today.items() if k != "sources" and isinstance(v, int)}
+        self.base_sources = today.get("sources") if isinstance(today.get("sources"), int) else 0
+
+    def _read(self):
+        try:
+            with open(self.path) as f:
+                days = json.load(f)
+            return days if isinstance(days, dict) else {}
+        except Exception:
+            return {}
+
+    def _flush(self):
+        days = self._read()
+        days[self.day] = dict(self.counts, sources=self.base_sources + len(self.limited))
+        try:
+            days = {k: days[k] for k in sorted(days)[-14:]}
+            with open(self.path + ".tmp", "w") as f:
+                json.dump(days, f)
+            os.replace(self.path + ".tmp", self.path)
+        except Exception:
+            pass
+
+    def _source(self, key, now):
+        s = self.sources.get(key)
+        if s is None:
+            s = {"tokens": float(BURST), "at": now, "events": 0, "bytes": 0,
+                 "refused": collections.deque(), "braked_until": 0.0}
+            self.sources[key] = s
+            if len(self.sources) > MAX_SOURCES:
+                self.sources.popitem(last=False)
+        else:
+            self.sources.move_to_end(key)
+        return s
+
+    def _limit(self, key, why):
+        self.counts[why] = self.counts.get(why, 0) + 1
+        first = key not in self.limited
+        if first and len(self.limited) < MAX_SOURCES:
+            self.limited.add(key)
+        elif first:
+            self.base_sources += 1  # past the bound, a source may be counted more than once
+        self._flush()
+        if first:
+            sys.stderr.write("oc-dtag-filter: a source hit the write limit (%s; %d sources today)\n"
+                             % (why, self.base_sources + len(self.limited)))
+            sys.stderr.flush()
+        return why
+
+    @staticmethod
+    def _counted(msg):
+        return msg.get("type") == "new" and msg.get("sourceType") in LIMITED_SOURCE_TYPES
+
+    def check(self, msg, size):
+        """None if the event may be judged; otherwise which limit its source is over."""
+        if not self._counted(msg):
+            return None
+        key = str(msg.get("sourceInfo"))
+        now = self.now()
+        self._roll(now)
+        s = self._source(key, now)
+        if s["braked_until"] > now:
+            return self._limit(key, "refusals")
+        s["tokens"] = min(float(BURST), s["tokens"] + (now - s["at"]) / REFILL_S)
+        s["at"] = now
+        if s["tokens"] < 1:
+            return self._limit(key, "burst")
+        if s["events"] >= DAY_EVENTS:
+            return self._limit(key, "day")
+        if s["bytes"] + size > DAY_BYTES:
+            return self._limit(key, "bytes")
+        s["tokens"] -= 1
+        s["events"] += 1
+        s["bytes"] += size
+        return None
+
+    def refused(self, msg):
+        """The relay refused this source's event on its merits: not for a limit, not for a busy gate."""
+        if not self._counted(msg):
+            return
+        now = self.now()
+        self._roll(now)
+        s = self._source(str(msg.get("sourceInfo")), now)
+        q = s["refused"]
+        q.append(now)
+        while q and q[0] <= now - BRAKE_S:
+            q.popleft()
+        if len(q) >= BRAKE_REFUSALS:
+            q.clear()
+            s["braked_until"] = now + BRAKE_S
+
+
 class DirGate:
     def __init__(self, cmd, timeout):
         self.cmd = cmd
@@ -236,6 +376,7 @@ class DirGate:
 
 def main():
     gate = DirGate(GATE_CMD, GATE_TIMEOUT_S)
+    limits = SourceLimits()
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -247,9 +388,14 @@ def main():
         if msg.get("type") not in ("new", "lookback"):
             continue
         event = msg.get("event", {})
-        out = decide(event)
-        if out["action"] == "accept" and gated(event):
-            out = gate.ask(out["id"], msg)
+        if limits.check(msg, event_size(event)):
+            out = {"id": event.get("id", ""), "action": "reject", "msg": RATE_LIMITED}
+        else:
+            out = decide(event)
+            if out["action"] == "accept" and gated(event):
+                out = gate.ask(out["id"], msg)
+            if out["action"] == "reject" and out.get("msg") != GATE_BUSY:
+                limits.refused(msg)
         sys.stdout.write(json.dumps(out) + "\n")
         sys.stdout.flush()
 

@@ -12,7 +12,8 @@
 // naming the visitor reaches strfry.
 //
 // GET /health is answered here: strfry's NIP-11 document read over loopback,
-// plus how many requests came without a usable Fly-Client-IP.
+// plus how many requests came without a usable Fly-Client-IP, and today's
+// write-limit counts from the write-policy plugin (FRONT_LIMIT_COUNTS).
 package main
 
 import (
@@ -21,8 +22,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -104,8 +107,11 @@ type sourceKey struct{}
 type Front struct {
 	Names    *Names
 	Upstream *url.URL
-	proxy    *httputil.ReverseProxy
-	client   *http.Client
+	// LimitCounts is the write-policy plugin's file of write-limit counts per
+	// UTC day: events refused by reason, and how many sources, never which.
+	LimitCounts string
+	proxy       *httputil.ReverseProxy
+	client      *http.Client
 
 	unknown   atomic.Int64
 	unknownAt atomic.Int64
@@ -183,11 +189,37 @@ func (f *Front) health(w http.ResponseWriter, r *http.Request) {
 		at = time.Unix(ts, 0).UTC().Format(time.RFC3339)
 	}
 	body["source_unknown"] = map[string]any{"count": f.unknown.Load(), "last_at": at}
+	body["rate_limited"] = f.rateLimited()
 	body["ts"] = time.Now().UTC().Format(time.RFC3339)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
+}
+
+// rateLimited is today's entry in the counts file: how many sources hit a
+// write limit and how many events each limit refused. No file is a day with
+// none; a file that does not parse is null, not a zero.
+func (f *Front) rateLimited() any {
+	day := f.Names.Now().UTC().Format(time.DateOnly)
+	raw, err := os.ReadFile(f.LimitCounts)
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]any{"day": day, "sources": 0, "events": map[string]int64{}}
+	}
+	var days map[string]map[string]int64
+	if err != nil || json.Unmarshal(raw, &days) != nil {
+		return nil
+	}
+	var sources int64
+	events := map[string]int64{}
+	for k, v := range days[day] {
+		if k == "sources" {
+			sources = v
+		} else {
+			events[k] = v
+		}
+	}
+	return map[string]any{"day": day, "sources": sources, "events": events}
 }
 
 // Run starts strfry and the front and returns when either stops: 1 when one of
@@ -257,7 +289,9 @@ func main() {
 		log.Fatalf("oc-relay-front: FRONT_UPSTREAM %q is not a URL with a host", raw)
 	}
 	names := &Names{Rand: rand.Reader, Now: time.Now}
-	os.Exit(Run(os.Args[1:], env("FRONT_LISTEN", "0.0.0.0:7777"), NewFront(names, upstream)))
+	front := NewFront(names, upstream)
+	front.LimitCounts = env("FRONT_LIMIT_COUNTS", "/data/strfry/db/rate-limit-counts.json")
+	os.Exit(Run(os.Args[1:], env("FRONT_LISTEN", "0.0.0.0:7777"), front))
 }
 
 func env(k, def string) string {

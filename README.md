@@ -105,7 +105,8 @@ flyctl logs                                       # tail
 
 - **Status:** `https://status.ochk.io/relay` (existing status module, new probe row)
 - **Backups:** nightly `strfry export` to a Hetzner storage box, retained 30 days. Quarterly restore drill.
-- **Monitoring:** analytics.ochk.io reads `/health` on its snapshot cron and alerts when the relay does not answer (`relay.down`) and when a request came without a usable `Fly-Client-IP` in the last hour (`relay.source_unknown`). Fly's own check reads `/health` every 30 s.
+- **Monitoring:** analytics.ochk.io reads `/health` on its snapshot cron and alerts when the relay does not answer (`relay.down`), when a request came without a usable `Fly-Client-IP` in the last hour (`relay.source_unknown`), and when the write limits refused more than a handful of senders today (`relay.rate_limited_sources`). Fly's own check reads `/health` every 30 s.
+- **Write limits:** the write-policy plugin limits each sender (strfry's source: the front's daily pseudonym) to 30 events at once and one more every 2 s, and 1,000 events or 4 MiB a UTC day; 60 refused events in an hour refuse the sender for an hour. Imports and syncs are exempt. Its counts by reason and the number of senders limited, per day, are in `rate-limit-counts.json`, and `/health` carries today's as `rate_limited`.
 - **Negentropy sync:** quarterly cron, runs `sync/backfill.sh`, ensures relay holds the family's public-relay history.
 - **Directory gate:** a Node sidecar (`policy/dir-gate/`) checks every kind-30114 write and every `oc-lock:device:` record. While it is down or slow, those writes answer `rate-limited: …` and nothing else changes; clients publish to public relays too. It has no health route of its own (Fly checks the front's `/health`); it reads this relay from strfry on 127.0.0.1:7778, never through the front; its answers are counted by reason per day in `dir-gate-counts.json`.
 
