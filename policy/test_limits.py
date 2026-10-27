@@ -233,7 +233,9 @@ proc = subprocess.Popen([sys.executable, str(HERE / "oc-dtag-filter.py")], stdin
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
 proc.stdin.write("\n".join(lines) + "\n")
 proc.stdin.flush()
-time.sleep(1.2)  # the second limit waits for the next event a second on
+time.sleep(1.5)  # a quiet second writes what the second limit left
+expect("plugin: written after a quiet second", list(json.loads((tmp / "limits.json").read_text()).values()),
+       [{"burst": 2, "sources": 1}])
 proc.stdin.write(line("b2", 30083, STAMP, B) + "\n")
 stdout, stderr = proc.communicate(timeout=30)
 out = types.SimpleNamespace(stdout=stdout, stderr=stderr)
@@ -249,6 +251,14 @@ expect("plugin: the gate was never asked", (tmp / "bridge.json").exists(), False
 expect("plugin: counts", list(json.loads((tmp / "limits.json").read_text()).values()), [{"burst": 2, "sources": 1}])
 if "a source hit the write limit (burst; 1 sources today)" not in out.stderr or A in out.stderr:
     failures.append(f"plugin: stderr {out.stderr!r}")
+
+# When strfry stops the plugin, nothing is left unwritten.
+(tmp / "limits.json").unlink()
+out = subprocess.run([sys.executable, str(HERE / "oc-dtag-filter.py")],
+                     input="\n".join(line(f"e{i}", 30083, STAMP, A) for i in range(33)) + "\n",
+                     capture_output=True, text=True, env=env, timeout=30)
+expect("plugin: written at the end", list(json.loads((tmp / "limits.json").read_text()).values()),
+       [{"burst": 3, "sources": 1}])
 
 # Which answers count toward the brake: a refusal on the merits (the prefix
 # gate's or the directory gate's), never an acceptance or a busy gate.
@@ -269,9 +279,11 @@ saved = (policy.SourceLimits, policy.GATE_CMD, policy.GATE_TIMEOUT_S, sys.stdin,
 os.environ["FAKE_GATE_MODE"] = "reject"
 policy.SourceLimits, policy.GATE_TIMEOUT_S = Recorder, 0.5
 policy.GATE_CMD = [sys.executable, str(HERE / "testdata" / "fake_gate.py")]
-sys.stdin = io.StringIO("\n".join([line("ok", 30083, STAMP, A), line("k1", 1, "x", A),
-                                   line("dev", 30078, DEVICE, A), line("hangme", 30078, DEVICE, A),
-                                   line("rl", 1, "x", A)]) + "\n")
+r, w = os.pipe()
+os.write(w, ("\n".join([line("ok", 30083, STAMP, A), line("k1", 1, "x", A), line("dev", 30078, DEVICE, A),
+                        line("hangme", 30078, DEVICE, A), line("rl", 1, "x", A)]) + "\n").encode())
+os.close(w)
+sys.stdin = os.fdopen(r)
 sys.stdout = io.StringIO()
 quiet, sys.stderr = sys.stderr, io.StringIO()
 policy.main()

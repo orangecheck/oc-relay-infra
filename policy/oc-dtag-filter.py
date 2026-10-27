@@ -287,8 +287,7 @@ class SourceLimits:
         key = str(msg.get("sourceInfo"))
         now = self.now()
         self._roll(now)
-        if self.dirty and now - self.flushed_at >= FLUSH_S:
-            self._flush(now)
+        self.write_waiting(now)
         s = self._source(key, now)
         if s["braked_until"] > now:
             return self._limit(key, "refusals", now)
@@ -304,6 +303,12 @@ class SourceLimits:
         s["events"] += 1
         s["bytes"] += size
         return None
+
+    def write_waiting(self, now=None, force=False):
+        """Writes the counts a limit left unwritten, once a second has passed, or now when forced."""
+        now = self.now() if now is None else now
+        if self.dirty and (force or now - self.flushed_at >= FLUSH_S):
+            self._flush(now)
 
     def refused(self, msg):
         """The relay refused this source's event on its merits: not for a limit, not for a busy gate."""
@@ -384,30 +389,54 @@ class DirGate:
             return {"id": eid, "action": "reject", "msg": GATE_BUSY}
 
 
+def lines(stream, quiet, every=FLUSH_S):
+    """strfry's lines, one at a time; quiet() runs after each second with none."""
+    fd = stream.fileno()
+    buf = b""
+    while True:
+        ready, _, _ = select.select([fd], [], [], every)
+        if not ready:
+            quiet()
+            continue
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        buf += chunk
+        while b"\n" in buf:
+            raw, buf = buf.split(b"\n", 1)
+            yield raw.decode("utf-8", "replace")
+    if buf:
+        yield buf.decode("utf-8", "replace")
+
+
 def main():
     gate = DirGate(GATE_CMD, GATE_TIMEOUT_S)
     limits = SourceLimits()
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except Exception:
-            continue
-        if msg.get("type") not in ("new", "lookback"):
-            continue
-        event = msg.get("event", {})
-        if limits.check(msg, event_size(event)):
-            out = {"id": event.get("id", ""), "action": "reject", "msg": RATE_LIMITED}
-        else:
-            out = decide(event)
-            if out["action"] == "accept" and gated(event):
-                out = gate.ask(out["id"], msg)
-            if out["action"] == "reject" and out.get("msg") != GATE_BUSY:
-                limits.refused(msg)
-        sys.stdout.write(json.dumps(out) + "\n")
-        sys.stdout.flush()
+    try:
+        for line in lines(sys.stdin, limits.write_waiting):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except Exception:
+                continue
+            if msg.get("type") not in ("new", "lookback"):
+                continue
+            event = msg.get("event", {})
+            if limits.check(msg, event_size(event)):
+                out = {"id": event.get("id", ""), "action": "reject", "msg": RATE_LIMITED}
+            else:
+                out = decide(event)
+                if out["action"] == "accept" and gated(event):
+                    out = gate.ask(out["id"], msg)
+                if out["action"] == "reject" and out.get("msg") != GATE_BUSY:
+                    limits.refused(msg)
+            sys.stdout.write(json.dumps(out) + "\n")
+            sys.stdout.flush()
+    finally:
+        # Counts a flood left unwritten are written when strfry stops the plugin.
+        limits.write_waiting(force=True)
 
 
 if __name__ == "__main__":
