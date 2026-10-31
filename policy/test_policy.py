@@ -79,6 +79,14 @@ for kind, d, why in BLOCKED:
 if policy.decide({"id": "x", "kind": 30080, "tags": []})["action"] == "accept":
     failures.append("  SHOULD REJECT kind 30080 with no d tag")
 
+# So is one with two. strfry matches a #d filter against every d value, so a
+# second d files the event under that slot too (an address's oc-lock:device:
+# slot, say) without the slot's own check. Nothing the family publishes has two.
+for kind, d, _ in EMITTED:
+    for tags in ([["d", d], ["d", f"oc-lock:device:{ADDR}"]], [["d", d], ["d", d]], [["d"], ["d", d]]):
+        if policy.decide({"id": "x", "kind": kind, "tags": tags})["action"] == "accept":
+            failures.append(f"  SHOULD REJECT kind {kind} with tags {[t[:2] for t in tags]}"[:160])
+
 # ---------------------------------------------------------------------------
 # ABUSE.md publishes this same matrix to integrators. It drifted from the code
 # once already (both said "oc-vote-poll:" while every client emits

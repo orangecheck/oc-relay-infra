@@ -47,6 +47,7 @@ const DEEP = 6;
 const reject = (msg) => ({ action: 'reject', msg });
 const busy = (why) => reject(`rate-limited: ${why}, try again`);
 const dTag = (ev) => (Array.isArray(ev?.tags) ? ev.tags.find((t) => Array.isArray(t) && t[0] === 'd')?.[1] : undefined);
+const dTagCount = (ev) => (Array.isArray(ev?.tags) ? ev.tags.filter((t) => Array.isArray(t) && t[0] === 'd').length : 0);
 
 class NoAnswer extends Error {}
 
@@ -299,6 +300,9 @@ export function createGate(deps, limits = LIMITS) {
     async function decide(msg) {
         const ev = msg?.event;
         // Without the network: the record's shape, its d tag, its signer.
+        // Every check reads the first d, and strfry matches #d against every d value, so a
+        // second d would put the record in another slot unchecked.
+        if (dTagCount(ev) > 1) return reject('invalid: a record carries exactly one d tag');
         const d = dTag(ev);
         if (ev?.kind === 30078 && typeof d === 'string' && d.startsWith(DEVICE_PREFIX)) {
             const ip = msg.sourceType === 'IP4' || msg.sourceType === 'IP6';

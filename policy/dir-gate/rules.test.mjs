@@ -151,6 +151,19 @@ describe('a listing', () => {
         assert.deepEqual(w.reads, { tip: 0, header: 0, coin: 0, device: 0, stored: 0 });
     });
 
+    it('is refused with a second d tag, before any read', async () => {
+        const { w, deps } = world();
+        const ev = listingEvent('alice');
+        chainFor(w, claimFor('alice'));
+        const twice = signNostrEvent(
+            { pubkey: ev.pubkey, kind: 30114, created_at: ev.created_at, content: ev.content, tags: [...ev.tags, ['d', directoryDtag('bob')]] },
+            nostr(1).nostrSk
+        );
+        assert.match((await createGate(deps).check(msg(twice))).msg, /^invalid: a record carries exactly one d tag/);
+        assert.deepEqual(w.reads, { tip: 0, header: 0, coin: 0, device: 0, stored: 0 });
+        assert.deepEqual(await createGate(deps).check(msg(ev)), { action: 'accept' });
+    });
+
     it('is refused when unanchored or anchored fewer than 6 blocks deep', async () => {
         const { w, deps } = world();
         assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /^invalid: the claim is not anchored/);
@@ -360,6 +373,17 @@ describe('a device record', () => {
             nostrSk
         );
         assert.match((await write(forged)).msg, /^invalid: a device record needs a BIP-322 signature/);
+    });
+
+    it('is refused with a second d tag, which would file it in another address\'s slot too', async () => {
+        const other = 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh';
+        const own = device(3);
+        const twice = signNostrEvent(
+            { pubkey: own.pubkey, kind: 30078, created_at: own.created_at, content: own.content, tags: [...own.tags, ['d', `oc-lock:device:${other}`]] },
+            nostr(3).nostrSk
+        );
+        assert.deepEqual(await write(own), { action: 'accept' });
+        assert.match((await write(twice)).msg, /^invalid: a record carries exactly one d tag/);
     });
 
     it('a revocation signed for one address is refused under another address\'s slot', async () => {

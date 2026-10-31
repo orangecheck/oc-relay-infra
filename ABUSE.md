@@ -38,6 +38,7 @@ and the relay silently refused every poll, ballot and reveal.
 
 - Events of any kind outside 30078, 30080–30087, 30110–30112, 30114.
 - Events on an allowed kind whose `d` tag does not start with one of the OC prefixes above (the one exception being a bare 64-hex `attestation_id` on kind 30078, which is the form `oc-attest-protocol` SPEC §7 prescribes).
+- Events on an allowed kind that carry more than one `d` tag. Every check here reads the first, but a `#d` query matches any of them, so a second `d` would file the event under a slot it was never checked for, such as another address's `oc-lock:device:` slot.
 - Events whose BIP-322 / Schnorr signatures don't verify (strfry's built-in check).
 - Events larger than 128 KiB (the `events.maxEventSize` ceiling, comfortably above the largest envelope in the family's test vectors).
 - Kind-30114 directory records that fail OC Chat's directory gate (below), and OC Lock device records (`oc-lock:device:`) without a BIP-322 signature by the address they are filed under.

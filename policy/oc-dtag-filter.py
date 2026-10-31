@@ -103,6 +103,10 @@ def d_tag_of(event):
     return None
 
 
+def d_tag_count(event):
+    return sum(1 for tag in event.get("tags", []) if isinstance(tag, list) and tag and tag[0] == "d")
+
+
 def decide(event):
     eid = event.get("id", "")
     kind = event.get("kind")
@@ -110,6 +114,14 @@ def decide(event):
     if allowed is None:
         return {"id": eid, "action": "reject",
                 "msg": "blocked: kind %s is not in the oc family allowlist" % kind}
+    # Every check below reads the first d tag, but strfry matches a #d filter
+    # against every d value. A second d would file the event under that slot
+    # too (an address's oc-lock:device: slot, another handle's directory slot)
+    # without the slot's own check, and crowd the answers readers get there.
+    # Nothing the family publishes carries two.
+    if d_tag_count(event) > 1:
+        return {"id": eid, "action": "reject",
+                "msg": "blocked: kind %s carries more than one d tag; a family event carries exactly one" % kind}
     d = d_tag_of(event)
     if d is None:
         return {"id": eid, "action": "reject",

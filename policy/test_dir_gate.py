@@ -22,8 +22,8 @@ FAKE = HERE / "testdata" / "fake_gate.py"
 DIR_D = "oc-lock-chat-dir:ZfLP2s-FrLVE152xghZld2DYd-YMs9P1Eu4qBv28mc4"
 
 
-def line(eid, kind, d):
-    return json.dumps({"type": "new", "event": {"id": eid, "kind": kind, "tags": [["d", d]], "content": "{}"},
+def line(eid, kind, d, tags=None):
+    return json.dumps({"type": "new", "event": {"id": eid, "kind": kind, "tags": tags or [["d", d]], "content": "{}"},
                        "receivedAt": 0, "sourceType": "IP4", "sourceInfo": "203.0.113.1"})
 
 
@@ -76,6 +76,16 @@ if got != [{"id": "v1", "action": "reject", "msg": "invalid: fake"},
 got, _ = run([DEVICE], "accept")
 if got != [{"id": "v1", "action": "accept"}]:
     failures.append(f"a device record is admitted on the sidecar's accept: {got}")
+
+# A second d tag is refused before the sidecar, whatever it would answer: strfry
+# matches #d against every d value, so the first would sit in ADDR's device slot
+# without its BIP-322 check, and the second in another handle's directory slot.
+SESSION_D = "oc-chat:device:did:oc:351d9e47fc5bc8d667900a0b1ecf296f"
+TWO = [line("t1", 30078, None, [["d", SESSION_D], ["d", "oc-lock:device:" + ADDR]]),
+       line("t2", 30114, None, [["d", DIR_D], ["d", "oc-lock-chat-dir:" + "x" * 43]])]
+got, _ = run(TWO + [DEVICE], "accept")
+if [g["action"] for g in got] != ["reject", "reject", "accept"] or not all("d tag" in g.get("msg", "") for g in got[:2]):
+    failures.append(f"an event with two d tags is refused before the sidecar: {got}")
 
 # Every refusal is counted under its reason, and logged with today's count.
 WHY = {"hang": "timeout", "die": "sidecar exited", "garble": "garbled answer", "wrongid": "timeout"}
