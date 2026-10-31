@@ -10,7 +10,7 @@ A single-region [strfry](https://github.com/hoytech/strfry) instance, configured
 
 1. Accept the family's Nostr kinds (30078, 30080–30087, 30110–30112, 30114 — 13 of them) and reject everything else.
 2. Additionally reject events that don't carry a canonical OC `d`-tag prefix (`oc-pledge:`, `oc-stamp:`, `oc-agent-del:`, etc. — plus a bare 64-hex `attestation_id`, which is what OC Attest's spec prescribes) — the curation that turns a generic relay into a *family* relay. The authoritative table is `policy/oc-dtag-filter.py`; `ABUSE.md` republishes it and `policy/test_policy.py` asserts the two agree.
-3. Sync historical events from `relay.damus.io`, `nos.lol`, `relay.primal.net`, and `nostr.oxtr.dev` via [negentropy](https://github.com/hoytech/strfry/blob/master/docs/negentropy.md).
+3. Keep a second copy of what it stores: the `Archive` workflow commits every family event, its id and signature checked, to the `archive` branch daily. `BYPASS.md` says what that copy is and is not.
 4. Act as OC Chat's named directory relay: a kind-30114 record that passes the prefix gate must also pass the claim rule of OC Chat §8.2.6, checked by `policy/dir-gate/` with the published rule (`@orangecheck/lock-core/directory`). The same sidecar admits an OC Lock device record only with a BIP-322 signature by its address. See `ABUSE.md`.
 5. Answer `/health` from `oc-relay-front`: strfry's NIP-11 name, version and supported NIPs, read over loopback, plus `source_unknown`, the count of requests that came without a usable `Fly-Client-IP`. Fly's health check and analytics.ochk.io read it.
 
@@ -58,7 +58,8 @@ oc-relay-infra/
 │   ├── test_policy.py     asserts the gate accepts what shipped clients emit
 │   └── test_dir_gate.py   runs the plugin and checks the 30114 bridge
 ├── sync/
-│   └── backfill.sh       negentropy sync from public relays, cold-start + quarterly
+│   ├── archive.py        the daily archive: every family event the relay stores, id and signature checked
+│   └── fetch.mjs         reads every event of the family's kinds from one relay, for archive.py
 ├── front/
 │   └── main.go           oc-relay-front: the daily pseudonym, /health, runs strfry
 └── boot/
@@ -72,7 +73,6 @@ Hosted on **Fly.io**, single region `fra` (Frankfurt). Fly handles TLS terminati
 ```bash
 flyctl deploy                                     # build + ship
 flyctl certs add relay.ochk.io                    # attach DNS, request Let's Encrypt
-flyctl ssh console -C "/usr/local/bin/oc-relay-backfill"   # cold-start negentropy sync
 flyctl logs                                       # tail
 ```
 
@@ -104,10 +104,10 @@ flyctl logs                                       # tail
 ## Operational
 
 - **Status:** `https://status.ochk.io/relay` (existing status module, new probe row)
-- **Backups:** nightly `strfry export` to a Hetzner storage box, retained 30 days. Quarterly restore drill.
+- **Backups:** Fly's snapshots of the volume (`BYPASS.md`: kept five days) and the `archive` branch (below). Nothing else exports the store, and no restore drill is scheduled.
 - **Monitoring:** analytics.ochk.io reads `/health` on its snapshot cron and alerts when the relay does not answer (`relay.down`), when a request came without a usable `Fly-Client-IP` in the last hour (`relay.source_unknown`), and when the write limits refused more than a handful of senders today (`relay.rate_limited_sources`). Fly's own check reads `/health` every 30 s.
 - **Write limits:** the write-policy plugin limits each sender (strfry's source: the front's daily pseudonym) to 30 events at once and one more every 2 s, and 1,000 events or 4 MiB a UTC day; 60 refused events in an hour refuse the sender for an hour. Imports and syncs are exempt. Its counts by reason and the number of senders limited, per day, are in `rate-limit-counts.json`, and `/health` carries today's as `rate_limited`.
-- **Negentropy sync:** quarterly cron, runs `sync/backfill.sh`, ensures relay holds the family's public-relay history.
+- **Archive:** the `Archive` workflow commits what the relay stores to the `archive` branch daily at 04:17 UTC. `BYPASS.md` says how to restore from it, and why it is not a set to copy to other relays as it stands.
 - **Directory gate:** a Node sidecar (`policy/dir-gate/`) checks every kind-30114 write and every `oc-lock:device:` record. While it is down or slow, those writes answer `rate-limited: …` and nothing else changes; clients publish to public relays too. It has no health route of its own (Fly checks the front's `/health`); it reads this relay from strfry on 127.0.0.1:7778, never through the front; its answers are counted by reason per day in `dir-gate-counts.json`.
 
 ## License

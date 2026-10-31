@@ -190,7 +190,7 @@ def count_refusal(why, path=BRIDGE_COUNTS):
 # Measured 2026-10-26/27 over 20.7 h: no source sent more than 3 events in a
 # minute; no author has more than 7 stored in a day, and the relay never took
 # more than 11 in a day. Only network writes count: Import, Stream and Sync
-# (backfill, archive) don't. Every event a source sends counts before it is
+# don't. Every event a source sends counts before it is
 # judged, so a flood cannot spend the directory gate's chain reads. The state
 # lives in this process only. The counts file holds totals by reason and how
 # many sources were limited, per day, never which.

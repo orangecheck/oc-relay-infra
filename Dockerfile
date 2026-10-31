@@ -54,10 +54,9 @@ COPY --from=dir-gate /gate /data/strfry/policy/dir-gate
 # The gate must load on this base, or every directory write would be refused.
 RUN /opt/node/lib/ld-musl-x86_64.so.1 --library-path /opt/node/lib /opt/node/bin/node \
     -e "import('/data/strfry/policy/dir-gate/rules.mjs').then(() => console.log('dir-gate loads'))"
-COPY sync/backfill.sh /usr/local/bin/oc-relay-backfill
 COPY boot/oc-relay-boot.sh /usr/local/bin/oc-relay-boot
 COPY --from=front /out/oc-relay-front /usr/local/bin/oc-relay-front
-RUN chmod +x /data/strfry/policy/oc-dtag-filter.py /usr/local/bin/oc-relay-backfill /usr/local/bin/oc-relay-boot
+RUN chmod +x /data/strfry/policy/oc-dtag-filter.py /usr/local/bin/oc-relay-boot
 
 EXPOSE 7777
 

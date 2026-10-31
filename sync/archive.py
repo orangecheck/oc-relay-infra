@@ -6,7 +6,8 @@ of them, so relay.ochk.io was the only copy (see BYPASS.md). This keeps a
 second, verifiable copy in git. Each event's id is recomputed (NIP-01) and its
 BIP-340 signature checked before it is written; the kinds and d-tag namespaces
 come from the write policy itself, so the archive can never drift from what the
-relay accepts. Any event that fails verification fails the run.
+relay accepts. Any event that fails verification fails the run. It is a copy
+of what the relay stores, not of what the family's readers accept (BYPASS.md).
 
     python3 sync/archive.py <out.jsonl> [relay]
 """
