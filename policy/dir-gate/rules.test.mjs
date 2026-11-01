@@ -359,6 +359,55 @@ describe('where bindings are read', () => {
     });
 });
 
+describe('a v2 bind and the public relays', () => {
+    /** A legacy v2 bind: its statement names no Nostr key, so any key can carry it. */
+    const v2bind = (n) =>
+        finalizeDeviceEvent({
+            deviceSk: sk(n),
+            address: ADDR,
+            device_id: `dev${n}`,
+            device_pk: 'aa'.repeat(32),
+            bindingStatement: buildBindingStatement({ address: ADDR, device_pk: 'aa'.repeat(32), device_id: `dev${n}`, created_at: '2026-10-01T00:00:00Z' }),
+            bindingSigBase64: `sig:${ADDR}`,
+            createdAtUnix: 1_790_000_000,
+        });
+    /** `ev`'s statement and binding_sig, carried by nostr(k). */
+    const carriedBy = (ev, k) => {
+        const { nostrSk, nostrPk } = nostr(k);
+        return signNostrEvent({ pubkey: nostrPk, kind: 30078, created_at: ev.created_at, content: ev.content, tags: ev.tags }, nostrSk);
+    };
+
+    it('a copy filed here first binds nobody when the original sits on a public relay', async () => {
+        const { w, deps } = world({ devices: [carriedBy(v2bind(2), 50)] });
+        w.publicDevices = [v2bind(2)];
+        chainFor(w, claimFor('alice'));
+        assert.match((await createGate(deps).check(msg(listingEvent('alice', { n: 50 })))).msg, /not bound to the address/);
+        assert.match((await createGate(deps).check(msg(tombstoneEvent('alice', claimFor('alice').id, 50)))).msg, /not bound to the address/);
+    });
+
+    it('a key bound here by a v2 bind waits for every public relay: one unanswered refuses as busy', async () => {
+        const { w, deps } = world({ devices: [v2bind(2)] });
+        chainFor(w, claimFor('alice'));
+        assert.deepEqual(await createGate(deps).check(msg(listingEvent('alice', { n: 2 }))), { action: 'accept' });
+        w.publicFails = true;
+        assert.match((await createGate(deps).check(msg(listingEvent('alice', { n: 2 })))).msg, /^rate-limited: /);
+    });
+
+    it('a key bound here by a v3 bind is not held up by the public relays', { timeout: 2000 }, async () => {
+        const { w, deps } = world({ devices: [device(1), v2bind(2)] });
+        chainFor(w, claimFor('alice'));
+        w.publicFails = true;
+        assert.deepEqual(await createGate(deps).check(msg(listingEvent('alice'))), { action: 'accept' });
+    });
+
+    it('a v3 key revoked here is refused as unbound, with the public relays down too', async () => {
+        const { w, deps } = world({ devices: [device(1), revocation(1)] });
+        chainFor(w, claimFor('alice'));
+        w.publicFails = true;
+        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /not bound to the address/);
+    });
+});
+
 describe('a device record', () => {
     const write = (ev) => createGate(world().deps).check({ ...msg(ev), event: ev });
 

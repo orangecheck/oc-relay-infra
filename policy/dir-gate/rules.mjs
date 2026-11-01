@@ -168,25 +168,29 @@ export function createGate(deps, limits = LIMITS) {
     // The keys bound to `address`. The signer's own records are read apart, so records others
     // pile into the slot cannot hide them; a revocation may be signed by any key, so it is read
     // from the full slot. Bound counts only once the full slot on this relay answered. Public
-    // relays are read only when this relay does not bind the signer: a revocation held only
-    // there is not seen while this relay binds it. A key they bind counts only once every one
-    // of them answered in full, since a revocation may sit on the one that did not.
+    // relays are read when this relay does not bind the signer by a v3 bind: a revocation held
+    // only there is not seen while a v3 bind here binds it. A v2 bind names no key, and binds its
+    // carrier only while no other key carries that device, so a copy filed here first would bind
+    // its copier until the original, on a public relay, is read beside it. A key the public
+    // relays bind, or a v2 bind here, counts only once every one of them answered in full.
     const boundKeys = async (address, signer) => {
         const pubRead = deps.publicDeviceEvents(address).catch(() => ({ events: [], allAnswered: false }));
         const [all, own] = await Promise.all([deps.deviceEvents(address), deps.deviceEventsBy(address, signer)]);
         if (all === 'no-answer') return 'no-answer';
-        const verifyFrom = async (events) => {
+        const now = new Date(deps.now());
+        const verifiedFrom = async (events) => {
             const byId = new Map();
             for (const e of events) if (e && typeof e.id === 'string') byId.set(e.id, e);
-            const verified = await verifyDeviceRecords([...byId.values()], address, { verifyBip322: deps.verifyBip322 });
-            return boundNostrKeys(verified, { now: new Date(deps.now()) });
+            return verifyDeviceRecords([...byId.values()], address, { verifyBip322: deps.verifyBip322 });
         };
         const local = [...all, ...(own === 'no-answer' ? [] : own)];
-        const keys = await verifyFrom(local);
-        if (keys.includes(signer)) return keys;
+        const here = await verifiedFrom(local);
+        // A signer with a v3 bind here is decided here, its revocations held here included.
+        const v3Binds = here.filter((r) => !r.revoked && r.bindingVersion === 'v3');
+        if (boundNostrKeys(v3Binds, { now }).includes(signer)) return boundNostrKeys(here, { now });
         const pub = await pubRead;
         if (own === 'no-answer' || !pub.allAnswered) return 'no-answer';
-        return verifyFrom([...local, ...pub.events]);
+        return boundNostrKeys(await verifiedFrom([...local, ...pub.events]), { now });
     };
 
     // One live claim per current coin per namespace (§8.2.6): coin -> the claim it backs.

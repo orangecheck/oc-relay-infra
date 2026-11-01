@@ -16,8 +16,9 @@ const ESPLORA = (process.env.OC_DIR_GATE_ESPLORA || 'https://mempool.space/api')
 // strfry itself, behind oc-relay-front: a read through the front would arrive with no visitor
 // address and count as one (fd00::).
 const RELAY = process.env.OC_DIR_GATE_RELAY || 'ws://127.0.0.1:7778';
-// Public relays OC Chat clients publish device records to (its CHAT_RELAYS), read for bindings too.
-const PUBLIC_RELAYS = (process.env.OC_DIR_GATE_PUBLIC_RELAYS ?? 'wss://relay.damus.io,wss://nos.lol')
+// Public relays read for bindings too: where the apps write device records, published
+// nostr-core 0.8.0's DEFAULT_RELAYS without this relay. A v2 bind's original may sit on any of them.
+const PUBLIC_RELAYS = (process.env.OC_DIR_GATE_PUBLIC_RELAYS ?? 'wss://nos.lol,wss://relay.primal.net,wss://relay.damus.io,wss://nostr.oxtr.dev')
     .split(',')
     .map((r) => r.trim())
     .filter(Boolean);

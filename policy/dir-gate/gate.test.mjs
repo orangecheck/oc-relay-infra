@@ -133,6 +133,12 @@ function run(input, env) {
 }
 
 describe('the relay gate.mjs reads', () => {
+    it("reads public relays where the apps write device records: published nostr-core 0.8.0's set without this relay", () => {
+        const source = readFileSync(join(here, 'gate.mjs'), 'utf8');
+        const list = source.match(/OC_DIR_GATE_PUBLIC_RELAYS \?\? '([^']+)'/)?.[1];
+        assert.deepEqual(list?.split(','), ['wss://nos.lol', 'wss://relay.primal.net', 'wss://relay.damus.io', 'wss://nostr.oxtr.dev']);
+    });
+
 
     it("is strfry's own address from strfry.conf, not the front's", () => {
         const conf = readFileSync(join(here, '..', '..', 'strfry.conf'), 'utf8');
