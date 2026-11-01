@@ -499,12 +499,13 @@ describe('a device record', () => {
         assert.match((await createGate(deps).check(msg(elsewhere))).msg, /^invalid: a device record needs a BIP-322 signature/);
     });
 
-    it('costs no chain or relay read, and is limited per source apart from listings', async () => {
+    it('costs no chain read and one read of its slot, and is limited per source apart from listings', async () => {
         const { w, deps } = world();
         const gate = createGate(deps);
         for (let i = 0; i < LIMITS.perIp; i++) assert.equal((await gate.check(msg(device(5)))).action, 'accept');
         assert.match((await gate.check(msg(device(5)))).msg, /^rate-limited: too many device records/);
-        assert.deepEqual(w.reads, { tip: 0, header: 0, coin: 0, device: 0, stored: 0 });
+        // The refusal over the limit reads nothing.
+        assert.deepEqual(w.reads, { tip: 0, header: 0, coin: 0, device: LIMITS.perIp, stored: 0 });
         chainFor(w, claimFor('alice'));
         assert.equal((await gate.check(msg(listingEvent('alice')))).action, 'accept');
     });
@@ -577,5 +578,131 @@ describe('a tombstone', () => {
         assert.match((await gate.check(msg(tombstoneEvent('alice', sha('other'))))).msg, /must end a claim this relay holds/);
         assert.match((await gate.check(msg(tombstoneEvent('alice', a.id, 3)))).msg, /not bound to the address/);
         assert.equal(w.reads.tip + w.reads.coin + w.reads.header, 0);
+    });
+});
+
+describe('copies of one signed statement', () => {
+    /** A Nostr key per index, past the 255 that sk(n) can tell apart. */
+    const carrier = (i) => {
+        const b = new Uint8Array(32);
+        b[0] = 7;
+        b[30] = i >> 8;
+        b[31] = i & 0xff;
+        return deriveNostrKey(b);
+    };
+    /** `ev`'s signed statement and binding_sig, filed under carrier `i`. */
+    const copy = (ev, i, createdAt = ev.created_at) => {
+        const { nostrSk, nostrPk } = carrier(i);
+        return signNostrEvent({ pubkey: nostrPk, kind: 30078, created_at: createdAt, content: ev.content, tags: ev.tags }, nostrSk);
+    };
+    /** Each event checked in turn and, once admitted, kept in the slot under its key, as strfry keeps 30078. */
+    async function file(w, deps, events) {
+        const gate = createGate(deps, { ...LIMITS, perIp: Infinity });
+        const answers = [];
+        for (const ev of events) {
+            const answer = await gate.check(msg(ev));
+            if (answer.action === 'accept') w.devices = [...w.devices.filter((e) => e.pubkey !== ev.pubkey), ev];
+            answers.push(answer);
+        }
+        return answers;
+    }
+    const carrying = (w, ev) => w.devices.filter((e) => e.content === ev.content).length;
+
+    it('a plant of 501 copies of a revocation is refused from the fourth, so the slot holds three', async () => {
+        const { w, deps } = world({ devices: [device(1)] });
+        const original = revocation(1);
+        const plant = Array.from({ length: 500 }, (_, i) => copy(original, i, 1_790_000_300));
+        const answers = await file(w, deps, [original, ...plant]);
+        assert.deepEqual(answers.slice(0, 3), Array(3).fill({ action: 'accept' }));
+        assert.equal(answers.filter((a) => a.action === 'accept').length, 3);
+        assert.match(answers[3].msg, /^duplicate: 3 records here already carry this statement/);
+        assert.equal(carrying(w, original), 3);
+    });
+
+    it("an honest second signing and a retry are admitted: chat's or lock-web's remote revocation, signed twice in one dialog, then resent", async () => {
+        const { w, deps } = world({ devices: [device(1)] });
+        const first = copy(revocation(1), 600);
+        const second = copy(revocation(1), 601);
+        // A retry sends the same signed record again; vault's, with a bind dated ahead, a third
+        // carrier. With three held, a carrier's own resend replaces its record and is admitted.
+        const answers = await file(w, deps, [first, second, second, copy(revocation(1), 602), first]);
+        assert.deepEqual(answers, Array(5).fill({ action: 'accept' }));
+        assert.equal(carrying(w, first), 3);
+    });
+
+    it('counts by the signed statement, not its signature: a taproot wallet signs one statement differently each time', async () => {
+        const { w, deps } = world({ devices: [device(1)] });
+        deps.verifyBip322 = ({ address, message, signature }) =>
+            (signature === `sig:${address}` || signature === `sig2:${address}`) && message.includes(`address: ${address}`);
+        const resigned = (i) => {
+            const { nostrSk, nostrPk } = carrier(i);
+            const ev = revocation(1);
+            const tags = ev.tags.map((t) => (t[0] === 'binding_sig' ? ['binding_sig', `sig2:${ADDR}`] : t));
+            return signNostrEvent({ pubkey: nostrPk, kind: 30078, created_at: ev.created_at, content: ev.content, tags }, nostrSk);
+        };
+        const answers = await file(w, deps, [revocation(1), copy(revocation(1), 700), resigned(701), resigned(702)]);
+        assert.deepEqual(answers.slice(0, 3), Array(3).fill({ action: 'accept' }));
+        assert.match(answers[3].msg, /^duplicate: /);
+    });
+
+    /** A legacy v2 bind: its statement names no Nostr key, so any key can carry it. */
+    const v2bind = (n) =>
+        finalizeDeviceEvent({
+            deviceSk: sk(n),
+            address: ADDR,
+            device_id: `dev${n}`,
+            device_pk: 'aa'.repeat(32),
+            bindingStatement: buildBindingStatement({ address: ADDR, device_pk: 'aa'.repeat(32), device_id: `dev${n}`, created_at: '2026-10-01T00:00:00Z' }),
+            bindingSigBase64: `sig:${ADDR}`,
+            createdAtUnix: 1_790_000_000,
+        });
+    const listingBy = (pk, n) => {
+        const ev = listingEvent('alice', { n });
+        assert.equal(ev.pubkey, pk);
+        return ev;
+    };
+
+    it('a v2 bind copied in first never leaves the copier as its only carrier: nobody is authorized', async () => {
+        // The owner alone binds its key (before the v2 sunset).
+        {
+            const { w, deps } = world({ devices: [] });
+            chainFor(w, claimFor('alice'));
+            await file(w, deps, [v2bind(2)]);
+            assert.deepEqual(await createGate(deps).check(msg(listingBy(nostr(2).nostrPk, 2))), { action: 'accept' });
+        }
+        // One copy first, the owner second: both held, two carriers, nobody authorized.
+        {
+            const { w, deps } = world({ devices: [] });
+            chainFor(w, claimFor('alice'));
+            const own = v2bind(2);
+            const { nostrSk, nostrPk } = nostr(50);
+            const planted = signNostrEvent({ pubkey: nostrPk, kind: 30078, created_at: own.created_at, content: own.content, tags: own.tags }, nostrSk);
+            assert.deepEqual(await file(w, deps, [planted, own]), Array(2).fill({ action: 'accept' }));
+            assert.match((await createGate(deps).check(msg(listingBy(nostr(2).nostrPk, 2)))).msg, /not bound to the address/);
+            assert.match((await createGate(deps).check(msg(listingBy(nostr(50).nostrPk, 50)))).msg, /not bound to the address/);
+        }
+        // Three copies first: the owner's own record is refused, and still nobody is authorized.
+        {
+            const { w, deps } = world({ devices: [] });
+            chainFor(w, claimFor('alice'));
+            const own = v2bind(2);
+            const planted = [50, 51, 52].map((k) => {
+                const { nostrSk, nostrPk } = nostr(k);
+                return signNostrEvent({ pubkey: nostrPk, kind: 30078, created_at: own.created_at, content: own.content, tags: own.tags }, nostrSk);
+            });
+            const answers = await file(w, deps, [...planted, own]);
+            assert.deepEqual(answers.slice(0, 3), Array(3).fill({ action: 'accept' }));
+            assert.match(answers[3].msg, /^duplicate: /);
+            for (const k of [2, 50, 51, 52]) {
+                assert.match((await createGate(deps).check(msg(listingBy(nostr(k).nostrPk, k)))).msg, /not bound to the address/, `key ${k}`);
+            }
+        }
+    });
+
+    it('a slot read without an answer refuses the record as busy, never admits it', async () => {
+        const { w, deps } = world({ devices: [device(1)] });
+        w.deviceFails = true;
+        assert.match((await createGate(deps).check(msg(device(3)))).msg, /^rate-limited: /);
+        assert.match((await createGate(deps).check(msg(revocation(1)))).msg, /^rate-limited: /);
     });
 });

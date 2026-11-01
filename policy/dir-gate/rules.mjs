@@ -7,7 +7,8 @@
 // BIP-322 signature by that address, or as a revocation of its own device by a key
 // that already holds a record there. The signature covers the statement, not the
 // Nostr event that carries it, so anyone can file copies of an address's
-// revocations and v2 binds in its slot under keys of their own.
+// revocations and v2 binds in its slot under keys of their own; at most three
+// records carry one statement here.
 
 import {
     channelDirectoryDtag,
@@ -32,6 +33,8 @@ export const LIMITS = {
     chainReadsPerSource: 30,
     /** Answer within this, or refuse: strfry waits on every check. */
     deadlineMs: 2500,
+    /** Records in an address's slot that may carry one signed statement. */
+    copiesPerStatement: 3,
 };
 
 const DEVICE_PREFIX = 'oc-lock:device:';
@@ -283,7 +286,19 @@ export function createGate(deps, limits = LIMITS) {
         }
         const address = d.slice(DEVICE_PREFIX.length);
         const verified = await verifyDeviceRecords([ev], address, { verifyBip322: deps.verifyBip322 });
-        if (verified.length === 1) return { action: 'accept' };
+        if (verified.length === 1) {
+            // Copies under other keys are capped, so they cannot crowd the slot past its paged
+            // read. Three keep every family writer (a second signing, a retry), and two or more
+            // carriers of a v2 bind authorize no one, so a refusal never leaves a copier as its
+            // only carrier. A record under this event's own key is the one it replaces.
+            const slot = await deps.deviceEvents(address);
+            if (slot === 'no-answer') return busy('a relay read did not answer');
+            const carried = slot.filter((e) => e?.content === ev.content && e.pubkey !== ev.pubkey).length;
+            if (carried >= limits.copiesPerStatement) {
+                return reject(`duplicate: ${limits.copiesPerStatement} records here already carry this statement`);
+            }
+            return { action: 'accept' };
+        }
         // A key that already holds a record in the slot may replace it with a revocation of its
         // own device, signed or not (OC Lock's unsigned advice). That replaces its record; it adds none.
         const revoked = statementOf(ev.content);
