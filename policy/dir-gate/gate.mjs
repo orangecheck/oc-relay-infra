@@ -94,9 +94,12 @@ const gate = createGate({
     deviceEvents: (address) => query({ kinds: [30078], '#d': [`oc-lock:device:${address}`], limit: 500 }, { pages: 4 }),
     deviceEventsBy: (address, pubkey) =>
         query({ kinds: [30078], '#d': [`oc-lock:device:${address}`], authors: [pubkey], limit: 50 }),
+    // Each public relay's slot is paged like this relay's: anyone can add copies to it there too.
     async publicDeviceEvents(address) {
         const reads = await Promise.all(
-            PUBLIC_RELAYS.map((relay) => query({ kinds: [30078], '#d': [`oc-lock:device:${address}`], limit: 500 }, { relay }))
+            PUBLIC_RELAYS.map((relay) =>
+                query({ kinds: [30078], '#d': [`oc-lock:device:${address}`], limit: 500 }, { pages: 4, relay })
+            )
         );
         return {
             events: reads.flatMap((r) => (r === 'no-answer' ? [] : r)),

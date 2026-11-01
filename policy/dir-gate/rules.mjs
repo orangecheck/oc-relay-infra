@@ -4,8 +4,10 @@
 // holds. Cheapest checks first. A read that does not answer, or a spent budget,
 // refuses with "rate-limited:", never admits. The rule itself is lock-core's.
 // A kind-30078 device record (oc-lock:device:<address>) is admitted only with a
-// BIP-322 signature by that address, so no one else can fill an address's slot,
-// or as a revocation of its own device by a key that already holds a record there.
+// BIP-322 signature by that address, or as a revocation of its own device by a key
+// that already holds a record there. The signature covers the statement, not the
+// Nostr event that carries it, so anyone can file copies of an address's
+// revocations and v2 binds in its slot under keys of their own.
 
 import {
     channelDirectoryDtag,
@@ -164,7 +166,8 @@ export function createGate(deps, limits = LIMITS) {
     // pile into the slot cannot hide them; a revocation may be signed by any key, so it is read
     // from the full slot. Bound counts only once the full slot on this relay answered. Public
     // relays are read only when this relay does not bind the signer: a revocation held only
-    // there is not seen while this relay binds it.
+    // there is not seen while this relay binds it. A key they bind counts only once every one
+    // of them answered in full, since a revocation may sit on the one that did not.
     const boundKeys = async (address, signer) => {
         const pubRead = deps.publicDeviceEvents(address).catch(() => ({ events: [], allAnswered: false }));
         const [all, own] = await Promise.all([deps.deviceEvents(address), deps.deviceEventsBy(address, signer)]);
@@ -179,9 +182,8 @@ export function createGate(deps, limits = LIMITS) {
         const keys = await verifyFrom(local);
         if (keys.includes(signer)) return keys;
         const pub = await pubRead;
-        const wider = await verifyFrom([...local, ...pub.events]);
-        if (wider.includes(signer)) return wider;
-        return own === 'no-answer' || !pub.allAnswered ? 'no-answer' : wider;
+        if (own === 'no-answer' || !pub.allAnswered) return 'no-answer';
+        return verifyFrom([...local, ...pub.events]);
     };
 
     // One live claim per current coin per namespace (§8.2.6): coin -> the claim it backs.

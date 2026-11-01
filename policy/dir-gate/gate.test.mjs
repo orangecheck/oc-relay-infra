@@ -3,9 +3,7 @@
 // No chain read and no public relay is touched.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -13,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 
 import { directoryDtag } from '@orangecheck/lock-core/directory';
 import { buildRevocationStatement, finalizeDeviceEvent } from '@orangecheck/lock-device';
+
+import { fakeRelay, filler } from './fake-relay.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const line = (id, content) =>
@@ -75,6 +75,51 @@ describe('gate.mjs', () => {
     });
 });
 
+describe('gate.mjs public relay reads', () => {
+    const address = 'bc1qmr7qn2t0ahj56ztpdswt54kn2r863ukd8wadj8';
+    const slot = `oc-lock:device:${address}`;
+    // A tombstone by a key this relay does not bind: the gate reads the public relays for it.
+    const tombstone = () => {
+        const content = { v: 2, handle: 'alice', address, opted_in: false, ends: 'cd'.repeat(32), created_at: 1_790_000_300 };
+        const event = { id: 'e9'.repeat(32), kind: 30114, pubkey: 'ab'.repeat(32), created_at: 1_790_000_300, content: JSON.stringify(content), tags: [['d', directoryDtag('alice')]] };
+        return JSON.stringify({ id: event.id, event, sourceType: 'IP4', sourceInfo: '203.0.113.1' }) + '\n';
+    };
+    const envFor = (local, publicRelays) => ({
+        ...process.env,
+        OC_DIR_GATE_COUNTS: join(mkdtempSync(join(tmpdir(), 'gate-')), 'counts.json'),
+        OC_DIR_GATE_RELAY: local.url,
+        OC_DIR_GATE_PUBLIC_RELAYS: publicRelays.map((r) => r.url).join(','),
+    });
+
+    it('pages a public relay past 500 records in the slot, and answers from the whole of it', async () => {
+        const local = await fakeRelay();
+        const pub = await fakeRelay(filler(30078, [['d', slot]], 600, 1_790_000_000));
+        try {
+            const answer = JSON.parse((await run(tombstone(), envFor(local, [pub]))).trim());
+            const reads = pub.filters.filter((f) => f['#d']?.[0] === slot);
+            assert.equal(reads.length, 2);
+            assert.equal(reads[1].until, 1_790_000_000 - 499);
+            // Read in full, the slot binds no one: refused as unbound, not as a relay that did not answer.
+            assert.match(answer.msg, /^invalid: the signing key is not bound/);
+        } finally {
+            local.close();
+            pub.close();
+        }
+    });
+
+    it('a public relay whose slot is stuck on one second is no answer: refused, never admitted', async () => {
+        const local = await fakeRelay();
+        const pub = await fakeRelay(filler(30078, [['d', slot]], 600, 1_790_000_000, 600));
+        try {
+            const answer = JSON.parse((await run(tombstone(), envFor(local, [pub]))).trim());
+            assert.match(answer.msg, /^rate-limited: /);
+        } finally {
+            local.close();
+            pub.close();
+        }
+    });
+});
+
 /** gate.mjs fed `input`, its stdout once it exits. */
 function run(input, env) {
     return new Promise((resolve, reject) => {
@@ -87,55 +132,8 @@ function run(input, env) {
     });
 }
 
-/** A relay that answers every REQ with EOSE and nothing else, keeping the filters it was asked. */
-async function fakeRelay() {
-    const filters = [];
-    const frame = (obj) => {
-        const body = Buffer.from(JSON.stringify(obj));
-        const head = body.length < 126 ? Buffer.from([0x81, body.length]) : Buffer.from([0x81, 126, body.length >> 8, body.length & 0xff]);
-        return Buffer.concat([head, body]);
-    };
-    const server = createServer();
-    server.on('upgrade', (req, socket) => {
-        const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
-        socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-        let buf = Buffer.alloc(0);
-        socket.on('error', () => {});
-        socket.on('data', (chunk) => {
-            buf = Buffer.concat([buf, chunk]);
-            for (;;) {
-                if (buf.length < 2) return;
-                let len = buf[1] & 0x7f;
-                let off = 2;
-                if (len === 126) {
-                    if (buf.length < 4) return;
-                    len = buf.readUInt16BE(2);
-                    off = 4;
-                }
-                const mask = buf.subarray(off, off + 4);
-                off += 4;
-                if (buf.length < off + len) return;
-                const data = Buffer.from(buf.subarray(off, off + len)).map((b, i) => b ^ mask[i % 4]);
-                const op = buf[0] & 0x0f;
-                buf = buf.subarray(off + len);
-                if (op === 8) return socket.end();
-                const msg = JSON.parse(data.toString());
-                if (msg[0] === 'REQ') {
-                    filters.push(msg[2]);
-                    socket.write(frame(['EOSE', msg[1]]));
-                }
-            }
-        });
-    });
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    return {
-        url: `ws://127.0.0.1:${server.address().port}`,
-        filters,
-        close: () => server.close(),
-    };
-}
-
 describe('the relay gate.mjs reads', () => {
+
     it("is strfry's own address from strfry.conf, not the front's", () => {
         const conf = readFileSync(join(here, '..', '..', 'strfry.conf'), 'utf8');
         const relay = conf.slice(conf.indexOf('\nrelay {'));

@@ -334,6 +334,16 @@ describe('where bindings are read', () => {
         assert.deepEqual(await createGate(deps).check(msg(listingEvent('alice'))), { action: 'accept' });
     });
 
+    it('a key bound only on public relays is refused while one of them did not answer in full: a revocation may sit there', async () => {
+        const { w, deps } = world({ devices: [] });
+        chainFor(w, claimFor('alice'));
+        w.publicDevices = [device(1)];
+        w.publicFails = true;
+        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /^rate-limited: /);
+        const tomb = await createGate(deps).check(msg(tombstoneEvent('alice', claimFor('alice').id)));
+        assert.match(tomb.msg, /^rate-limited: /);
+    });
+
     it('a revocation read on a public relay retires a key this relay does not bind', async () => {
         const { w, deps } = world({ devices: [] });
         chainFor(w, claimFor('alice'));
@@ -357,7 +367,7 @@ describe('a device record', () => {
         assert.deepEqual(await write(revocation(3)), { action: 'accept' });
     });
 
-    it('is refused without one, so no one else can fill an address slot', async () => {
+    it('is refused without one', async () => {
         const other = 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh';
         // Signed for another address, filed under ADDR.
         const misfiled = device(4, other);
