@@ -1,5 +1,9 @@
 // Dump every event of the given kinds from one relay as a JSON array on stdout.
-// Pages backwards with `until`, one kind per REQ, until a page adds nothing new.
+// Pages backwards with `until`, one kind per REQ, until a page comes back short.
+// `until` names a second, so a second holding more than a page cannot be read past:
+// a full page that adds nothing exits 1 with nothing on stdout, and the archive is
+// not rewritten from part of the set. relay.ochk.io's strfry answers 500 to a page
+// (its default maxFilterLimit), the limit asked.
 //   node sync/fetch.mjs wss://relay.ochk.io 30078,30080,...
 const [, , relay, kindList] = process.argv;
 const kinds = kindList.split(',').map(Number);
@@ -30,17 +34,23 @@ function page(filter) {
     });
 }
 
+const LIMIT = 500;
 const all = new Map();
 for (const kind of kinds) {
     let until;
     for (;;) {
-        const filter = { kinds: [kind], limit: 500, ...(until === undefined ? {} : { until }) };
+        const filter = { kinds: [kind], limit: LIMIT, ...(until === undefined ? {} : { until }) };
         const events = await page(filter);
         let added = 0;
         for (const e of events) if (!all.has(e.id)) (all.set(e.id, e), added++);
-        if (added === 0) break;
-        const oldest = Math.min(...events.map((e) => e.created_at));
-        until = until === oldest ? oldest - 1 : oldest;
+        if (events.length < LIMIT) break;
+        if (added === 0) {
+            ws.close();
+            process.stderr.write(`incomplete: kind ${kind} has more than ${LIMIT} events at created_at ${until}, which a page cannot read past\n`);
+            process.exit(1);
+        }
+        // The next page starts at the oldest second again, so the rest of that second is read.
+        until = Math.min(...events.map((e) => e.created_at));
     }
 }
 ws.close();

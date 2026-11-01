@@ -84,9 +84,10 @@ def main():
     out = pathlib.Path(sys.argv[1])
     relay = sys.argv[2] if len(sys.argv) > 2 else "wss://relay.ochk.io"
     kinds = ",".join(str(k) for k in sorted(policy.ALLOWED_PREFIXES))
-    raw = subprocess.run(["node", str(HERE / "fetch.mjs"), relay, kinds],
-                         check=True, capture_output=True, text=True).stdout
-    events = json.loads(raw)
+    run = subprocess.run(["node", str(HERE / "fetch.mjs"), relay, kinds], capture_output=True, text=True)
+    if run.returncode != 0:
+        sys.exit("refusing to archive: the relay was not read in full: %s" % run.stderr.strip())
+    events = json.loads(run.stdout)
     bad = []
     keep = []
     for ev in events:
