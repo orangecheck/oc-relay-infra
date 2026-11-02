@@ -359,24 +359,24 @@ describe('where bindings are read', () => {
     });
 });
 
-describe('a v2 bind and the public relays', () => {
-    /** A legacy v2 bind: its statement names no Nostr key, so any key can carry it. */
-    const v2bind = (n) =>
-        finalizeDeviceEvent({
-            deviceSk: sk(n),
-            address: ADDR,
-            device_id: `dev${n}`,
-            device_pk: 'aa'.repeat(32),
-            bindingStatement: buildBindingStatement({ address: ADDR, device_pk: 'aa'.repeat(32), device_id: `dev${n}`, created_at: '2026-10-01T00:00:00Z' }),
-            bindingSigBase64: `sig:${ADDR}`,
-            createdAtUnix: 1_790_000_000,
-        });
-    /** `ev`'s statement and binding_sig, carried by nostr(k). */
-    const carriedBy = (ev, k) => {
-        const { nostrSk, nostrPk } = nostr(k);
-        return signNostrEvent({ pubkey: nostrPk, kind: 30078, created_at: ev.created_at, content: ev.content, tags: ev.tags }, nostrSk);
-    };
+/** A legacy v2 bind: its statement names no Nostr key, so any key can carry it. */
+const v2bind = (n) =>
+    finalizeDeviceEvent({
+        deviceSk: sk(n),
+        address: ADDR,
+        device_id: `dev${n}`,
+        device_pk: 'aa'.repeat(32),
+        bindingStatement: buildBindingStatement({ address: ADDR, device_pk: 'aa'.repeat(32), device_id: `dev${n}`, created_at: '2026-10-01T00:00:00Z' }),
+        bindingSigBase64: `sig:${ADDR}`,
+        createdAtUnix: 1_790_000_000,
+    });
+/** `ev`'s statement and binding_sig, carried by nostr(k), under `tags` (its own by default). */
+const carriedBy = (ev, k, tags = ev.tags) => {
+    const { nostrSk, nostrPk } = nostr(k);
+    return signNostrEvent({ pubkey: nostrPk, kind: 30078, created_at: ev.created_at, content: ev.content, tags }, nostrSk);
+};
 
+describe('a v2 bind and the public relays', () => {
     it('a copy filed here first binds nobody when the original sits on a public relay', async () => {
         const { w, deps } = world({ devices: [carriedBy(v2bind(2), 50)] });
         w.publicDevices = [v2bind(2)];
@@ -405,6 +405,54 @@ describe('a v2 bind and the public relays', () => {
         chainFor(w, claimFor('alice'));
         w.publicFails = true;
         assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /not bound to the address/);
+    });
+});
+
+describe('what a public relay serves under the id of another record', () => {
+    // Two lies about one id: other content under it, or its own content with a signature that fails.
+    const otherContent = (ev) => ({ ...ev, content: 'junk' });
+    const badSignature = (ev) => ({ ...ev, sig: '00'.repeat(64) });
+
+    it('replaces no revocation held here: the revoked key stays unbound', async () => {
+        for (const lie of [otherContent, badSignature]) {
+            const { w, deps } = world({ devices: [revocation(1)] });
+            chainFor(w, claimFor('alice'));
+            w.publicDevices = [device(1), lie(revocation(1))];
+            assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /not bound to the address/, lie.name);
+            assert.match((await createGate(deps).check(msg(tombstoneEvent('alice', claimFor('alice').id)))).msg, /not bound to the address/, lie.name);
+        }
+    });
+
+    it('replaces no v2 bind held here, so its copy never becomes the only carrier', async () => {
+        for (const lie of [otherContent, badSignature]) {
+            const { w, deps } = world({ devices: [v2bind(2), carriedBy(v2bind(2), 50)] });
+            chainFor(w, claimFor('alice'));
+            w.publicDevices = [lie(v2bind(2))];
+            assert.match((await createGate(deps).check(msg(listingEvent('alice', { n: 50 })))).msg, /not bound to the address/, lie.name);
+            assert.match((await createGate(deps).check(msg(tombstoneEvent('alice', claimFor('alice').id, 50)))).msg, /not bound to the address/, lie.name);
+        }
+    });
+
+    it('replaces no v2 bind another public relay serves, whichever relay answers first', async () => {
+        for (const lie of [otherContent, badSignature]) {
+            for (const order of [(a, b) => [a, b], (a, b) => [b, a]]) {
+                const { w, deps } = world({ devices: [carriedBy(v2bind(2), 50)] });
+                chainFor(w, claimFor('alice'));
+                w.publicDevices = order(v2bind(2), lie(v2bind(2)));
+                assert.match((await createGate(deps).check(msg(listingEvent('alice', { n: 50 })))).msg, /not bound to the address/, lie.name);
+            }
+        }
+    });
+
+    it('binds nobody with a record filed outside the address\'s slot, though a public relay serves it for that slot', async () => {
+        const { w, deps } = world({ devices: [] });
+        chainFor(w, claimFor('alice'));
+        const elsewhere = device(1).tags.map((t) => (t[0] === 'd' ? ['d', `oc-lock:device:${ADDR}:dev1`] : t));
+        w.publicDevices = [carriedBy(device(1), 1, elsewhere)];
+        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /not bound to the address/);
+        // Filed in the slot, the same bind binds.
+        w.publicDevices = [device(1)];
+        assert.deepEqual(await createGate(deps).check(msg(listingEvent('alice'))), { action: 'accept' });
     });
 });
 

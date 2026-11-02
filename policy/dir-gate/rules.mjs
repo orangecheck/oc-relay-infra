@@ -178,9 +178,15 @@ export function createGate(deps, limits = LIMITS) {
         const [all, own] = await Promise.all([deps.deviceEvents(address), deps.deviceEventsBy(address, signer)]);
         if (all === 'no-answer') return 'no-answer';
         const now = new Date(deps.now());
+        // A public relay can serve anything under the id of a record held here or on another relay,
+        // so only an event whose id and signature check out, filed in this address's slot, may stand
+        // for its id; the first such copy does, and one that fails replaces nothing.
         const verifiedFrom = async (events) => {
             const byId = new Map();
-            for (const e of events) if (e && typeof e.id === 'string') byId.set(e.id, e);
+            for (const e of events) {
+                if (!e || typeof e.id !== 'string' || byId.has(e.id)) continue;
+                if (dTag(e) === DEVICE_PREFIX + address && verifyNostrEvent(e)) byId.set(e.id, e);
+            }
             return verifyDeviceRecords([...byId.values()], address, { verifyBip322: deps.verifyBip322 });
         };
         const local = [...all, ...(own === 'no-answer' ? [] : own)];
