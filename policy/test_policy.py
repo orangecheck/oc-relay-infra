@@ -102,6 +102,10 @@ CHAT_REJECT = [
     ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"]]}, "a d tag and nothing else"),
     ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"], ["addr", "did:oc:00000000000000000000000000000000"], ["revocation", VOUCH]]},
      "a host revocation filed under another did:oc's slot"),
+    ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"], ["addr", DID], ["revocation", "revoked"]]},
+     "a host revocation whose revocation tag is not a compact JWS"),
+    ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"], ["addr", DID], ["revocation", ""]]},
+     "a host revocation with an empty revocation tag"),
 ]
 for ev, why in CHAT_ACCEPT:
     got = policy.decide(ev)
