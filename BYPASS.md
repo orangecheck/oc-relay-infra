@@ -18,7 +18,7 @@ The pattern mirrors [`oc-guardian-kit/BYPASS.md`](https://github.com/orangecheck
 | Read all pledges sworn by `bc1q…` | client queries relay.ochk.io + 4 public relays, dedupes by event id | client queries 4 public relays, dedupes by event id |
 | Family-vitals counts on `ochk.io` | REQ per kind on relay.ochk.io, counted by the client up to strfry's 500-event limit (strfry 0.9.7 has no NIP-45 COUNT) | the same REQ fan-out on the four public relays, deduped by event id |
 | Restore history after losing the volume | publish `events.jsonl` from the `archive` branch back to relay.ochk.io, whose write policy checks each event again | read `events.jsonl` from the `archive` branch, and copy to a public relay only the events the family's readers accept |
-| Audit log of takedown requests | `relay.ochk.io/transparency` (kind + d-tag + date only, never event content) | request takedown directly with the public relay operator, governed by their abuse policy |
+| Audit log of takedown requests | none published yet (planned: kind + d-tag + date only, never event content) | request takedown directly with the public relay operator, governed by their abuse policy |
 
 ## Build-time invariant
 

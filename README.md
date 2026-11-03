@@ -25,7 +25,7 @@ That's it. No NIP-42 auth on writes. No paid tiers. No content moderation beyond
 ## What this is NOT
 
 - A protocol. Relay infrastructure is not in any normative `oc-*-protocol` spec — specs stay relay-agnostic by design.
-- A required publish target. Every web app's `DEFAULT_RELAYS` keeps the public set; relay.ochk.io is appended. The TypeScript invariant is enforced at the type level (see `@orangecheck/nostr-core` once extracted in Phase 3).
+- A required publish target. Every web app's `DEFAULT_RELAYS` keeps the public set; relay.ochk.io is appended. The TypeScript invariant is enforced at the type level in `@orangecheck/nostr-core` (`ValidRelaySet`).
 - A required read target. Every read continues to race ≥3 public relays.
 - A custodian, escrow, or trust anchor. Trust anchors are Bitcoin (BIP-322 attestations) and Nostr-published envelopes (offline-verifiable). Relays are commodity infrastructure.
 
@@ -37,9 +37,9 @@ Five web repos in the family currently document the empirical failure mode:
 
 — the relay client in `oc-pledge-web`, a private repo (and four siblings, drift between them already visible).
 
-`oc-fleet-web/src/pages/api/cron/republish-nostr.ts` exists *because* request-path publishes drop. A Vercel Cron retries every 5 minutes. That cron is a workaround for the gap a first-party relay closes.
+When this relay was planned, `oc-fleet-web/src/pages/api/cron/republish-nostr.ts` existed *because* request-path publishes drop: a Vercel Cron retried every 5 minutes, a workaround for the gap a first-party relay closes. (Fleet is retired now; the history stands.)
 
-A first-party kind-allowlisted relay collapses the structural split between "ephemeral pubkey" publish flows (pledge / vote / fleet-reputation / stamp / lock / agent) and "stable service-key" publish flows (attest / me / fleet-server-publisher) into a single guaranteed-accept endpoint, without taking us out of the public Nostr graph.
+A first-party kind-allowlisted relay collapses the structural split between "ephemeral pubkey" publish flows (pledge / vote / stamp / lock / agent) and "stable service-key" publish flows (attest / me) into a single guaranteed-accept endpoint, without taking us out of the public Nostr graph.
 
 ## File set
 
@@ -78,24 +78,24 @@ flyctl logs                                       # tail
 
 **Phase 0 — repo scaffold.** ✅ Done.
 **Phase 1 — Fly provision + DNS + client co-publish.** ✅ Done (this commit).
-**Phase 2 — read-side fallback + family-vitals switchover.** Not started.
-**Phase 3 — family indexer endpoint + npm consolidation.** Not started.
+**Phase 2 — read-side fallback + family-vitals switchover.** ✅ Done: clients read relay.ochk.io among their relays, and oc-www's `/api/family-stats` counts family events from it.
+**Phase 3 — npm consolidation.** ✅ Done: `@orangecheck/nostr-core` holds the relay set every site imports. (The plan also named a family indexer endpoint; none was built beyond family-stats.)
 
 ## Decisions
 
 - **Domain:** `relay.ochk.io` (matches the subdomain-per-product convention).
 - **Hosting:** Fly.io single region (fra). Anycast available if we ever need it.
 - **Cost ceiling:** <€30/mo year-one (compute + 50 GB volume + monitoring).
-- **Transparency log:** yes — kind + d-tag + ISO date at `relay.ochk.io/transparency`, never event content. Defensible without becoming a content judge.
+- **Transparency log:** none is published yet: `relay.ochk.io/transparency` serves the relay's default page. Planned: kind + d-tag + ISO date (and the legal basis), never event content. Defensible without becoming a content judge.
 - **On-call:** the orangecheck operator; year one accepts "may stay down until next business day" because the BYPASS invariant means public relays still serve everything.
-- **Migration scope:** all seven web repos in Phase 1 (`oc-attest-web` SERVICE_KEY_RELAYS included alongside the six others).
+- **Migration scope:** the web repos in Phase 1 (`oc-attest-web` SERVICE_KEY_RELAYS included alongside the others; fleet has since been retired).
 
 ## Family relationship
 
 | Repo | What it does with this relay |
 |---|---|
 | `oc-attest-web` | Phase 1: `relay.ochk.io` appended to `SERVICE_KEY_RELAYS` |
-| `oc-pledge-web`, `oc-fleet-web`, `oc-vote-web`, `oc-stamp-web`, `oc-lock-web` | Phase 1: appended to `DEFAULT_RELAYS` (browser-side publish + read) |
+| `oc-pledge-web`, `oc-vote-web`, `oc-stamp-web`, `oc-lock-web` | Phase 1: appended to `DEFAULT_RELAYS` (browser-side publish + read) |
 | `oc-agent-web` | Phase 1: appended to `RELAY_URLS` |
 | `oc-me-web` | Phase 1: appended to env-driven `OC_NOSTR_RELAYS` (Vercel env, no code change) |
 | `oc-www` | Phase 2: `api/family-stats.ts` switches from single-relay `nos.lol` COUNT to `relay.ochk.io` with d-tag prefix filters |
@@ -103,7 +103,7 @@ flyctl logs                                       # tail
 
 ## Operational
 
-- **Status:** `https://status.ochk.io/relay` (existing status module, new probe row)
+- **Status:** no public status page; analytics.ochk.io watches `/health` (Monitoring, below).
 - **Backups:** Fly's snapshots of the volume (`BYPASS.md`: kept five days) and the `archive` branch (below). Nothing else exports the store, and no restore drill is scheduled.
 - **Monitoring:** analytics.ochk.io reads `/health` on its snapshot cron and alerts when the relay does not answer (`relay.down`), when a request came without a usable `Fly-Client-IP` in the last hour (`relay.source_unknown`), and when the write limits refused more than a handful of senders today (`relay.rate_limited_sources`). Fly's own check reads `/health` every 30 s.
 - **Write limits:** the write-policy plugin limits each sender (strfry's source: the front's daily pseudonym) to 30 events at once and one more every 2 s, and 1,000 events or 4 MiB a UTC day; 60 refused events in an hour refuse the sender for an hour. Imports and syncs are exempt. Its counts by reason and the number of senders limited, per day, are in `rate-limit-counts.json`, and `/health` carries today's as `rate_limited`.
@@ -118,4 +118,3 @@ MIT. See LICENSE.
 
 - [`hoytech/strfry`](https://github.com/hoytech/strfry) — the relay binary
 - [`relayable-org/strfry-policies`](https://github.com/relayable-org/strfry-policies) — Deno policy plugin pattern
-- The [research doc](https://github.com/orangecheck/oc-relay-infra/blob/main/docs/2026-05-relay-decision.md) capturing the decision (when migrated)

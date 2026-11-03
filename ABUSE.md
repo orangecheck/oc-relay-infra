@@ -65,7 +65,7 @@ We honor takedown requests against specific event IDs **only** for content that 
 1. Send a takedown request to `abuse@ochk.io` with: the event ID, the kind, the d-tag, the legal basis, and your contact information. Anonymous requests are ignored.
 2. We confirm receipt within 5 business days. We respond with our decision within 15 business days.
 3. If we honor the request, the event is deleted from `relay.ochk.io`'s LMDB. **We do not request takedown from public relays on the requester's behalf** — that's between the requester and the public relay operator. The event is still public on Nostr unless every operator agrees.
-4. The decision is logged at `https://relay.ochk.io/transparency` with: kind, d-tag, ISO date, legal basis (one short phrase). The full event content is NEVER included in the transparency log.
+4. No transparency log is published yet. Planned: each decision logged with kind, d-tag, ISO date and legal basis (one short phrase), never the event content.
 
 A takedown of an event from our relay does *not* take it down from public relays. Public-relay copies remain — the event is still verifiable forever from the swearer's local copy or from any public relay. This is intentional: the relay's role is reliability and curation, not censorship.
 
@@ -82,7 +82,7 @@ The relay does not see, and could not see if it tried:
 
 - Abuse: `abuse@ochk.io`
 - Operations: `ops@ochk.io`
-- Transparency log: `https://relay.ochk.io/transparency`
+- Transparency log: not published yet (planned, above)
 - Source: `https://github.com/orangecheck/oc-relay-infra`
 
 ## When this file goes stale
