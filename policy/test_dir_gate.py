@@ -68,7 +68,11 @@ if got != [{"id": "d1", "action": "reject", "msg": "invalid: fake"}]:
 ADDR = "bc1qmr7qn2t0ahj56ztpdswt54kn2r863ukd8wadj8"
 DEVICE = line("v1", 30078, "oc-lock:device:" + ADDR)
 ATTEST = line("a1", 30078, "c" * 64)
-SESSION = line("c1", 30078, "oc-chat:device:did:oc:351d9e47fc5bc8d667900a0b1ecf296f")
+SESSION_DID = "did:oc:351d9e47fc5bc8d667900a0b1ecf296f"
+# A vouched OC Chat bind (the Python policy checks its shape, the sidecar never sees it).
+SESSION = line("c1", 30078, None, [["d", "oc-chat:device:" + SESSION_DID], ["addr", SESSION_DID], ["device_id", "dev-1"],
+                                   ["device_pk", "ab" * 32], ["auth", "session"], ["binding_sig", ""],
+                                   ["vouch", "eyJhbGciOiJFZERTQSJ9.c3RhdGVtZW50.c2ln"]])
 got, _ = run([DEVICE, ATTEST, SESSION], "reject")
 if got != [{"id": "v1", "action": "reject", "msg": "invalid: fake"},
            {"id": "a1", "action": "accept"}, {"id": "c1", "action": "accept"}]:

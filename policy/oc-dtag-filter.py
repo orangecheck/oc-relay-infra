@@ -130,7 +130,49 @@ def decide(event):
     if not any(d.startswith(p) for p in allowed) and not (bare and bare.match(d)):
         return {"id": eid, "action": "reject",
                 "msg": "blocked: d tag '%s' is not an oc namespace prefix for kind %s" % (d[:32], kind)}
+    if kind == 30078 and d.startswith(CHAT_DEVICE_PREFIX):
+        problem = chat_device_problem(event, d[len(CHAT_DEVICE_PREFIX):])
+        if problem:
+            return {"id": eid, "action": "reject", "msg": problem}
     return {"id": eid, "action": "accept"}
+
+
+# OC Chat's session device records, oc-chat:device:<did_oc> (oc-chat-protocol
+# SPEC §8.6). Chat reads three shapes and no other: a bind carrying ochk.io's
+# vouch, a device's own revocation (device_pk "revoked"), and ochk.io's signed
+# revocation. A bind without a vouch, the shape chat published before
+# 2026-09-24 (oc-chat-web 6b5b5b4), is bound to nothing and read by no one, but
+# it names an account's did:oc in public; refusing it here keeps it from coming
+# back once it is deleted. The relay checks the shape only: chat verifies the
+# vouch and the revocation against ochk.io's published keys.
+CHAT_DEVICE_PREFIX = "oc-chat:device:"
+COMPACT_JWS = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+
+
+def first_tag(event, name):
+    for tag in event.get("tags", []):
+        if isinstance(tag, list) and len(tag) >= 2 and tag[0] == name:
+            return tag[1]
+    return None
+
+
+def chat_device_problem(event, did):
+    """Why OC Chat would never read this oc-chat:device:<did> record, or None."""
+    if first_tag(event, "addr") != did:
+        return "invalid: an OC Chat device record's addr must be the did:oc its d tag names (oc-chat SPEC §8.6)"
+    revocation = first_tag(event, "revocation")
+    if revocation is not None:
+        if isinstance(revocation, str) and COMPACT_JWS.match(revocation):
+            return None
+        return "invalid: an OC Chat host revocation carries ochk.io's signed statement as a compact JWS (oc-chat SPEC §8.6)"
+    if first_tag(event, "auth") != "session" or not first_tag(event, "device_id") or not first_tag(event, "device_pk"):
+        return "invalid: an OC Chat session device record needs auth=session, device_id and device_pk (oc-chat SPEC §8.6)"
+    if first_tag(event, "device_pk") == "revoked":
+        return None
+    vouch = first_tag(event, "vouch")
+    if not isinstance(vouch, str) or not COMPACT_JWS.match(vouch):
+        return "invalid: an OC Chat session device record needs ochk.io's vouch; chat reads none without one (oc-chat SPEC §8.6)"
+    return None
 
 
 # Kind 30114 is the OC Chat directory. relay.ochk.io is its named directory

@@ -34,7 +34,6 @@ DID = "did:oc:ed30f1d9fc9acf7a88283069a2f97fc8"
 EMITTED = [
     (30078, ID, "@orangecheck/sdk src/nostr.ts:63 (bare attestation_id, SPEC L228)"),
     (30078, f"oc-lock:device:{ADDR}", "@orangecheck/lock-device src/index.ts:111"),
-    (30078, f"oc-chat:device:{DID}", "oc-chat-web src/lib/chat/session-binding.ts:75"),
     (30078, f"oc-pledge:{ID}", "oc-pledge-web src/lib/pledge/event.ts:61"),
     (30080, f"oc-vote:poll:{ID}", "oc-vote-web src/lib/vote/events.ts:53 + vote-cli events.ts:41"),
     (30081, f"oc-vote:ballot:{ID}:{ADDR}", "oc-vote-web events.ts:81 + vote-cli events.ts:57"),
@@ -74,6 +73,44 @@ for kind, d, why in BLOCKED:
     got = policy.decide({"id": "x", "kind": kind, "tags": [["d", d]]})
     if got["action"] == "accept":
         failures.append(f"  SHOULD REJECT kind {kind} d={d[:44]}\n      reason: {why}")
+
+# OC Chat's session device records (oc-chat-protocol SPEC §8.6). Chat reads a
+# bind only with ochk.io's vouch, so a record without one (the shape chat
+# published before 2026-09-24, oc-chat-web 6b5b5b4) is read by no one and is
+# refused here, so it cannot come back after it is deleted. The relay checks
+# the shape; chat verifies the signatures. Tags as session-binding.ts
+# finalizeSessionDeviceEvent builds them.
+VOUCH = "eyJhbGciOiJFZERTQSJ9.b2MtY2hhdDpkZXZpY2Utdm91Y2g6djE.c2ln"
+SESSION = [["d", f"oc-chat:device:{DID}"], ["addr", DID], ["device_id", "dev-1"], ["device_pk", "ab" * 32],
+           ["alg", "x25519"], ["auth", "session"], ["binding_sig", ""]]
+def with_tags(base, **over):
+    tags = [t for t in base if t[0] not in over] + [[k, v] for k, v in over.items() if v is not None]
+    return {"id": "x", "kind": 30078, "tags": tags}
+CHAT_ACCEPT = [
+    (with_tags(SESSION, vouch=VOUCH), "a bind with ochk.io's vouch"),
+    (with_tags(SESSION, device_pk="revoked"), "a device's own revocation (device_pk 'revoked'), which carries no vouch"),
+    ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"], ["addr", DID], ["revocation", VOUCH]]},
+     "ochk.io's signed revocation: a resolver must not refuse it for its device_id, device_pk or auth tags"),
+]
+CHAT_REJECT = [
+    (with_tags(SESSION), "no vouch: the pre-fix shape chat ignores (P66)"),
+    (with_tags(SESSION, vouch=""), "an empty vouch"),
+    (with_tags(SESSION, vouch="not-a-jws"), "a vouch that is not a compact JWS"),
+    (with_tags(SESSION, vouch=VOUCH, addr="did:oc:00000000000000000000000000000000"), "addr names another did:oc than the d tag"),
+    (with_tags(SESSION, vouch=VOUCH, auth=None), "no auth=session tag"),
+    (with_tags(SESSION, vouch=VOUCH, device_id=None), "no device_id"),
+    ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"]]}, "a d tag and nothing else"),
+    ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"], ["addr", "did:oc:00000000000000000000000000000000"], ["revocation", VOUCH]]},
+     "a host revocation filed under another did:oc's slot"),
+]
+for ev, why in CHAT_ACCEPT:
+    got = policy.decide(ev)
+    if got["action"] != "accept":
+        failures.append(f"  SHOULD ACCEPT oc-chat:device ({why})\n      relay: {got.get('msg')}")
+for ev, why in CHAT_REJECT:
+    got = policy.decide(ev)
+    if got["action"] == "accept":
+        failures.append(f"  SHOULD REJECT oc-chat:device ({why})")
 
 # A family kind with no d tag at all is still a reject.
 if policy.decide({"id": "x", "kind": 30080, "tags": []})["action"] == "accept":
