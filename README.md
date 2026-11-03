@@ -79,7 +79,7 @@ flyctl logs                                       # tail
 **Phase 0 — repo scaffold.** ✅ Done.
 **Phase 1 — Fly provision + DNS + client co-publish.** ✅ Done (this commit).
 **Phase 2 — read-side fallback + family-vitals switchover.** ✅ Done: clients read relay.ochk.io among their relays, and oc-www's `/api/family-stats` counts family events from it.
-**Phase 3 — npm consolidation.** ✅ Done: `@orangecheck/nostr-core` holds the relay set every site imports. (The plan also named a family indexer endpoint; none was built beyond family-stats.)
+**Phase 3 — npm consolidation.** ✅ Done: `@orangecheck/nostr-core` holds the relay set the browser sites import. attest-web keeps its own list, me-web reads `OC_NOSTR_RELAYS`, and app-web has none. (The plan also named a family indexer endpoint; none was built beyond family-stats.)
 
 ## Decisions
 
