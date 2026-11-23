@@ -767,6 +767,19 @@ describe('copies of one signed statement', () => {
         assert.match(answers[4].msg, /^duplicate: 3 records here already carry this statement/);
     });
 
+    it('counts a content with a second final LF as another statement: only one LF is the signed text\'s (OC Lock 2.6.0 §3.3)', async () => {
+        const { w, deps } = world({ devices: [device(1)] });
+        const original = revocation(1);
+        const twice = (i) => {
+            const { nostrSk, nostrPk } = carrier(i);
+            return signNostrEvent({ pubkey: nostrPk, kind: 30078, created_at: original.created_at, content: `${original.content}\n`, tags: original.tags }, nostrSk);
+        };
+        assert.ok(original.content.endsWith('\n') && !original.content.endsWith('\n\n'));
+        const answers = await file(w, deps, [original, copy(original, 900), copy(original, 901), twice(902), copy(original, 903)]);
+        assert.deepEqual(answers.slice(0, 4), Array(4).fill({ action: 'accept' }));
+        assert.match(answers[4].msg, /^duplicate: 3 records here already carry this statement/);
+    });
+
     it("an honest second signing and a retry are admitted: chat's or lock-web's remote revocation, signed twice in one dialog, then resent", async () => {
         const { w, deps } = world({ devices: [device(1)] });
         const first = copy(revocation(1), 600);
