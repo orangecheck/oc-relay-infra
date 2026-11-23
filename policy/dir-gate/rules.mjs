@@ -19,7 +19,7 @@ import {
     repointId,
     resolveDirectory,
 } from '@orangecheck/lock-core/directory';
-import { BINDING_VERSION, boundNostrKeys, verifyDeviceRecords, verifyNostrEvent } from '@orangecheck/lock-device';
+import { BINDING_VERSION, bindingSigTexts, boundNostrKeys, verifyDeviceRecords, verifyNostrEvent } from '@orangecheck/lock-device';
 import { base64Decode, bitcoinAnchors, hexDecode, parseProof } from '@orangecheck/stamp-ots';
 
 export const LIMITS = {
@@ -300,10 +300,12 @@ export function createGate(deps, limits = LIMITS) {
             // Copies under other keys are capped, so they cannot crowd the slot past its paged
             // read. Three keep every family writer (a second signing, a retry), and two or more
             // carriers of a v2 bind authorize no one, so a refusal never leaves a copier as its
-            // only carrier. A record under this event's own key is the one it replaces.
+            // only carrier. A record under this event's own key is the one it replaces. With and
+            // without its final LF, a content is one statement (OC Lock 2.6.0 §3.3).
             const slot = await deps.deviceEvents(address);
             if (slot === 'no-answer') return busy('a relay read did not answer');
-            const carried = slot.filter((e) => e?.content === ev.content && e.pubkey !== ev.pubkey).length;
+            const statement = (c) => (typeof c === 'string' ? bindingSigTexts(c).at(-1) : null);
+            const carried = slot.filter((e) => statement(e?.content) === statement(ev.content) && e.pubkey !== ev.pubkey).length;
             if (carried >= limits.copiesPerStatement) {
                 return reject(`duplicate: ${limits.copiesPerStatement} records here already carry this statement`);
             }

@@ -26,6 +26,21 @@ const nostr = (n) => deriveNostrKey(sk(n));
 
 /** A stub wallet: "sig:<address>" signs that address's statements. */
 const verifyBip322 = ({ address, message, signature }) => signature === `sig:${address}` && message.includes(`address: ${address}`);
+/** The same, and "trim:<address>": a wallet that trims the text before it signs, so it signs the text without its final LF. */
+const trimmingToo = (a) =>
+    verifyBip322(a) || (a.signature === `trim:${a.address}` && a.message.includes(`address: ${a.address}`) && !a.message.endsWith('\n'));
+/** `ev` with its binding_sig by the trimming wallet and its content as `content` makes it, re-signed by `sk`. */
+const trimmed = (ev, sk, content = (c) => c) =>
+    signNostrEvent(
+        {
+            pubkey: ev.pubkey,
+            kind: ev.kind,
+            created_at: ev.created_at,
+            content: content(ev.content),
+            tags: ev.tags.map((t) => (t[0] === 'binding_sig' ? ['binding_sig', `trim:${ADDR}`] : t)),
+        },
+        sk
+    );
 
 function device(n, address = ADDR) {
     return finalizeDeviceEvent({
@@ -245,6 +260,16 @@ describe('a listing', () => {
         assert.equal(w.reads.header, 0);
     });
 
+    it('is refused when its key is bound by a record a trimming wallet revoked (OC Lock 2.6.0 §3.3)', async () => {
+        const { w, deps } = world();
+        deps.verifyBip322 = trimmingToo;
+        chainFor(w, claimFor('alice'));
+        assert.deepEqual(await createGate(deps).check(msg(listingEvent('alice'))), { action: 'accept' });
+        // The revocation keeps its final LF; its binding_sig covers the statement without it.
+        w.devices = [device(1), trimmed(revocation(1), nostr(99).nostrSk)];
+        assert.match((await createGate(deps).check(msg(listingEvent('alice')))).msg, /not bound to the address/);
+    });
+
     it('is refused when its key is not bound, or is bound by a revoked record', async () => {
         const { w, deps } = world({ devices: [device(2)] });
         chainFor(w, claimFor('alice'));
@@ -462,6 +487,18 @@ describe('a device record', () => {
     it('is admitted with a BIP-322 signature by the address its slot names, a revocation too', async () => {
         assert.deepEqual(await write(device(3)), { action: 'accept' });
         assert.deepEqual(await write(revocation(3)), { action: 'accept' });
+    });
+
+    it('is admitted as a trimming wallet signs it: over its content, or over its content without the final LF (OC Lock 2.6.0 §3.3)', async () => {
+        const { deps } = world();
+        deps.verifyBip322 = trimmingToo;
+        const check = (ev) => createGate(deps).check(msg(ev));
+        // Written as the bytes the wallet signed, as an issuer writes it.
+        assert.deepEqual(await check(trimmed(device(3), nostr(3).nostrSk, (c) => c.slice(0, -1))), { action: 'accept' });
+        // Its final LF kept.
+        assert.deepEqual(await check(trimmed(device(4), nostr(4).nostrSk)), { action: 'accept' });
+        // A second LF is another text.
+        assert.match((await check(trimmed(device(5), nostr(5).nostrSk, (c) => `${c}\n`))).msg, /^invalid: a device record needs a BIP-322 signature/);
     });
 
     it('is refused without one', async () => {
@@ -714,6 +751,20 @@ describe('copies of one signed statement', () => {
         assert.equal(answers.filter((a) => a.action === 'accept').length, 3);
         assert.match(answers[3].msg, /^duplicate: 3 records here already carry this statement/);
         assert.equal(carrying(w, original), 3);
+    });
+
+    it('counts copies with and without the final LF as one statement, when its binding_sig covers it without (OC Lock 2.6.0 §3.3)', async () => {
+        const { w, deps } = world({ devices: [device(1)] });
+        deps.verifyBip322 = trimmingToo;
+        const original = trimmed(revocation(1), nostr(99).nostrSk);
+        const bare = (i) => {
+            const { nostrSk, nostrPk } = carrier(i);
+            return signNostrEvent({ pubkey: nostrPk, kind: 30078, created_at: original.created_at, content: original.content.slice(0, -1), tags: original.tags }, nostrSk);
+        };
+        const answers = await file(w, deps, [original, copy(original, 800), bare(801), bare(802), copy(original, 803)]);
+        assert.deepEqual(answers.slice(0, 3), Array(3).fill({ action: 'accept' }));
+        assert.match(answers[3].msg, /^duplicate: 3 records here already carry this statement/);
+        assert.match(answers[4].msg, /^duplicate: 3 records here already carry this statement/);
     });
 
     it("an honest second signing and a retry are admitted: chat's or lock-web's remote revocation, signed twice in one dialog, then resent", async () => {

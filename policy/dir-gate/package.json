@@ -11,9 +11,9 @@
         "test": "node --test"
     },
     "dependencies": {
-        "@orangecheck/bip322": "1.1.3",
+        "@orangecheck/bip322": "1.2.0",
         "@orangecheck/lock-core": "1.3.0",
-        "@orangecheck/lock-device": "0.8.0",
+        "@orangecheck/lock-device": "0.9.0",
         "@orangecheck/stamp-ots": "0.6.1"
     }
 }
