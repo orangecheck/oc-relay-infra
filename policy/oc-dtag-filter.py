@@ -40,6 +40,10 @@ ALLOWED_PREFIXES = {
         "oc-pledge:",
         "oc-pledge-outcome:",
         "oc-pledge-abandonment:",
+        # oc-attest-protocol KEY-HOLDER.md §9 (proposal): who holds an ochk.io
+        # address's identity key, at oc-attest-key:<address>:<record id> and
+        # oc-attest-key:issuer:<record id>; @orangecheck/keys publicationTags.
+        "oc-attest-key:",
         # Implementation-only namespace, no spec text yet: oc-chat-web publishes
         # did:oc session records at oc-chat:device:<did_oc> (src/lib/chat/
         # session-binding.ts L75). oc-chat-protocol SPEC §3 says the device

@@ -8,7 +8,7 @@ Only events of kinds in the family's normative range and with canonical OC `d`-t
 
 | kind | sub-protocol | required `d`-tag prefix |
 |---|---|---|
-| 30078 | OC Attest / OC Lock / OC Pledge / OC Chat | a bare 64-hex `attestation_id` (OC Attest), or `oc-lock:`, `oc-pledge:`, `oc-pledge-outcome:`, `oc-pledge-abandonment:`, `oc-chat:device:` |
+| 30078 | OC Attest / OC Lock / OC Pledge / OC Chat | a bare 64-hex `attestation_id` (OC Attest), or `oc-lock:`, `oc-pledge:`, `oc-pledge-outcome:`, `oc-pledge-abandonment:`, `oc-attest-key:`, `oc-chat:device:` |
 | 30080 | OC Vote — poll | `oc-vote:poll:` |
 | 30081 | OC Vote — ballot | `oc-vote:ballot:` |
 | 30082 | OC Vote — reveal | `oc-vote:reveal:` |

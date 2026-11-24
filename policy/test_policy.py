@@ -35,6 +35,8 @@ EMITTED = [
     (30078, ID, "@orangecheck/sdk src/nostr.ts:63 (bare attestation_id, SPEC L228)"),
     (30078, f"oc-lock:device:{ADDR}", "@orangecheck/lock-device src/index.ts:111"),
     (30078, f"oc-pledge:{ID}", "oc-pledge-web src/lib/pledge/event.ts:61"),
+    (30078, "oc-attest-key:bc1q2t7hhwrqwv8s2yqqlfstrljy3eg7j9sy6lkwdx:" + ID, "@orangecheck/keys src/records.ts publicationTags (KEY-HOLDER.md §9)"),
+    (30078, f"oc-attest-key:issuer:{ID}", "@orangecheck/keys src/records.ts publicationTags (issuer record)"),
     (30080, f"oc-vote:poll:{ID}", "oc-vote-web src/lib/vote/events.ts:53 + vote-cli events.ts:41"),
     (30081, f"oc-vote:ballot:{ID}:{ADDR}", "oc-vote-web events.ts:81 + vote-cli events.ts:57"),
     (30082, f"oc-vote:reveal:{ID}", "oc-vote-web events.ts:100 + vote-cli events.ts:72"),
