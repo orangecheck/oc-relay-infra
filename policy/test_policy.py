@@ -61,6 +61,7 @@ BLOCKED = [
     (30078, ID.upper(), "uppercase hex is not the canonical attestation id rendering"),
     (30078, ID[:63], "63 hex chars is not a sha256"),
     (30078, ID + "a", "65 hex chars is not a sha256"),
+    (30078, ID + "\n", "a bare id and a newline: the id must be the whole d tag"),
     (30083, f"oc-vote:poll:{ID}", "right namespace, wrong kind"),
     (30110, f"oc-chat:ch:{ID}", "brand-rooted chat d-tag; spec is verb-rooted oc-lock-chat-ch:"),
 ]
@@ -98,6 +99,7 @@ CHAT_REJECT = [
     (with_tags(SESSION), "no vouch: the pre-fix shape chat ignores (P66)"),
     (with_tags(SESSION, vouch=""), "an empty vouch"),
     (with_tags(SESSION, vouch="not-a-jws"), "a vouch that is not a compact JWS"),
+    (with_tags(SESSION, vouch=VOUCH + "\n"), "a compact JWS and a newline: the JWS must be the whole vouch"),
     (with_tags(SESSION, vouch=VOUCH, addr="did:oc:00000000000000000000000000000000"), "addr names another did:oc than the d tag"),
     (with_tags(SESSION, vouch=VOUCH, auth=None), "no auth=session tag"),
     (with_tags(SESSION, vouch=VOUCH, device_id=None), "no device_id"),
@@ -108,6 +110,8 @@ CHAT_REJECT = [
      "a host revocation whose revocation tag is not a compact JWS"),
     ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"], ["addr", DID], ["revocation", ""]]},
      "a host revocation with an empty revocation tag"),
+    ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"], ["addr", DID], ["revocation", VOUCH + "\n"]]},
+     "a compact JWS and a newline: the JWS must be the whole revocation tag"),
 ]
 for ev, why in CHAT_ACCEPT:
     got = policy.decide(ev)

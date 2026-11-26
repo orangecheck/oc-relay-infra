@@ -95,9 +95,10 @@ ALLOWED_PREFIXES = {
 
 # Kinds where a BARE content-addressed id is a legitimate d-tag, no prefix.
 # Only OC Attest: id = sha256(canonical_message), rendered as 64 lowercase hex
-# (oc-attest-protocol SPEC.md §7). Anchored exact-match, so this widens the gate
-# by exactly one shape and cannot be used to smuggle arbitrary d-tags through.
-BARE_ID_KINDS = {30078: re.compile(r"^[0-9a-f]{64}$")}
+# (oc-attest-protocol SPEC.md §7). It must match the whole d tag (fullmatch;
+# a `$` would also match before a final newline), so this widens the gate by
+# exactly one shape and cannot be used to smuggle arbitrary d-tags through.
+BARE_ID_KINDS = {30078: re.compile(r"[0-9a-f]{64}")}
 
 
 def d_tag_of(event):
@@ -131,7 +132,7 @@ def decide(event):
         return {"id": eid, "action": "reject",
                 "msg": "blocked: kind %s requires a d tag with one of %s" % (kind, allowed)}
     bare = BARE_ID_KINDS.get(kind)
-    if not any(d.startswith(p) for p in allowed) and not (bare and bare.match(d)):
+    if not any(d.startswith(p) for p in allowed) and not (bare and bare.fullmatch(d)):
         return {"id": eid, "action": "reject",
                 "msg": "blocked: d tag '%s' is not an oc namespace prefix for kind %s" % (d[:32], kind)}
     if kind == 30078 and d.startswith(CHAT_DEVICE_PREFIX):
@@ -150,7 +151,7 @@ def decide(event):
 # back once it is deleted. The relay checks the shape only: chat verifies the
 # vouch and the revocation against ochk.io's published keys.
 CHAT_DEVICE_PREFIX = "oc-chat:device:"
-COMPACT_JWS = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+COMPACT_JWS = re.compile(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 
 
 def first_tag(event, name):
@@ -166,7 +167,7 @@ def chat_device_problem(event, did):
         return "invalid: an OC Chat device record's addr must be the did:oc its d tag names (oc-chat SPEC §8.6)"
     revocation = first_tag(event, "revocation")
     if revocation is not None:
-        if isinstance(revocation, str) and COMPACT_JWS.match(revocation):
+        if isinstance(revocation, str) and COMPACT_JWS.fullmatch(revocation):
             return None
         return "invalid: an OC Chat host revocation carries ochk.io's signed statement as a compact JWS (oc-chat SPEC §8.6)"
     if first_tag(event, "auth") != "session" or not first_tag(event, "device_id") or not first_tag(event, "device_pk"):
@@ -174,7 +175,7 @@ def chat_device_problem(event, did):
     if first_tag(event, "device_pk") == "revoked":
         return None
     vouch = first_tag(event, "vouch")
-    if not isinstance(vouch, str) or not COMPACT_JWS.match(vouch):
+    if not isinstance(vouch, str) or not COMPACT_JWS.fullmatch(vouch):
         return "invalid: an OC Chat session device record needs ochk.io's vouch; chat reads none without one (oc-chat SPEC §8.6)"
     return None
 
