@@ -100,6 +100,8 @@ CHAT_REJECT = [
     (with_tags(SESSION, vouch=""), "an empty vouch"),
     (with_tags(SESSION, vouch="not-a-jws"), "a vouch that is not a compact JWS"),
     (with_tags(SESSION, vouch=VOUCH + "\n"), "a compact JWS and a newline: the JWS must be the whole vouch"),
+    (with_tags(SESSION, vouch="eyJhbGciOiJFZERTQSJ9..c2ln"), "a vouch whose middle segment is empty"),
+    (with_tags(SESSION, vouch="eyJhbGciOiJFZERTQSJ9.c2ln"), "a vouch of two segments, not three"),
     (with_tags(SESSION, vouch=VOUCH, addr="did:oc:00000000000000000000000000000000"), "addr names another did:oc than the d tag"),
     (with_tags(SESSION, vouch=VOUCH, auth=None), "no auth=session tag"),
     (with_tags(SESSION, vouch=VOUCH, device_id=None), "no device_id"),
@@ -112,6 +114,10 @@ CHAT_REJECT = [
      "a host revocation with an empty revocation tag"),
     ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"], ["addr", DID], ["revocation", VOUCH + "\n"]]},
      "a compact JWS and a newline: the JWS must be the whole revocation tag"),
+    ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"], ["addr", DID], ["revocation", "eyJhbGciOiJFZERTQSJ9..c2ln"]]},
+     "a host revocation whose middle segment is empty"),
+    ({"id": "x", "kind": 30078, "tags": [["d", f"oc-chat:device:{DID}"], ["addr", DID], ["revocation", "eyJhbGciOiJFZERTQSJ9.c2ln"]]},
+     "a host revocation of two segments, not three"),
 ]
 for ev, why in CHAT_ACCEPT:
     got = policy.decide(ev)
